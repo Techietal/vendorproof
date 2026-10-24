@@ -29,6 +29,17 @@ func adminURL() string {
 	return defaultAdminURL
 }
 
+// databaseRequired turns connection failures into failures instead of skips.
+// Acceptance runs set REQUIRE_DATABASE=1.
+func databaseRequired() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("REQUIRE_DATABASE"))) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
 // NewRawDB creates an empty database (without migrations) and registers
 // cleanup. It returns the URL and an open pool.
 func NewRawDB(t testing.TB) (string, *pgxpool.Pool) {
@@ -41,7 +52,10 @@ func NewRawDB(t testing.TB) (string, *pgxpool.Pool) {
 
 	admin, err := pgx.Connect(ctx, adminURL())
 	if err != nil {
-		t.Skipf("PostgreSQL unavailable (%v); set TEST_DATABASE_URL", err)
+		if databaseRequired() {
+			t.Fatalf("REQUIRE_DATABASE=1 but PostgreSQL is unavailable: %v (set TEST_DATABASE_URL)", err)
+		}
+		t.Skipf("PostgreSQL unavailable (%v); set TEST_DATABASE_URL or REQUIRE_DATABASE=1", err)
 	}
 	name := "vp_test_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:20]
 	ident := pgx.Identifier{name}.Sanitize()
