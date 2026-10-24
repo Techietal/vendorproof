@@ -9,7 +9,7 @@
 7. **Idempotency:** obligation database unique constraints; notification unique delivery keys; transactional outbox for external sends.
 8. **Security:** OIDC access-token verification (issuer, audience, signature, algorithm, type), identity as `(issuer, subject)`, organization-scoped RBAC resolved per request from PostgreSQL, and 404 for cross-tenant probes. Short-lived scoped upload grants and private buckets follow. Postgres composite foreign keys reject cross-organization references.
 9. **Auditability:** append-only audit rows written in the business transaction; database trigger rejects update/delete; versioned submissions and human review decisions follow.
-10. **Rollback discipline:** forward migrations may drop compatibility only when provably lossless; `000002.down` refuses duplicate membership history instead of deleting it.
+10. **Rollback discipline:** downgrades that cannot represent the newer information are refused on populated databases; `000002.down` runs only on an empty database. Baseline is an attested, catalog-validated one-off for the manually applied legacy schema.
 11. **Membership lifecycle:** soft revocation keeps history and allows re-invitation; a partial unique index permits one active row per identity. Owner mutations lock the organization row so the last active owner cannot disappear.
 12. **Bootstrap:** the first owner is created by a local CLI against PostgreSQL, never an unauthenticated HTTP route.
 13. **Scope:** evidence collection and review, not legal-compliance certification. Regulatory requirement templates are administrator-defined.

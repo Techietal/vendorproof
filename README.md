@@ -79,17 +79,24 @@ migration ledger existed. Such a database is baselined once, after confirming it
 schema matches `000001`:
 
 ```sh
-go run ./cmd/migrate baseline   # records version 1 only
+go run ./cmd/migrate baseline --confirm   # records version 1 only
 go run ./cmd/migrate up         # applies forward migrations
 ```
 
-`baseline` refuses an empty, already-versioned, or incompatible database. Fresh
-databases skip it. `down` reverts exactly one version.
+A fresh database runs `up`; the one-time `baseline` path is only for the historical
+database whose `000001` was applied manually. Baseline requires `--confirm` and a
+complete catalog match against `000001` (tables, columns, types, nullability, defaults,
+constraints, indexes, triggers, functions). Fresh or already-versioned databases are
+refused.
 
-Rollback to `000001` is lossless only while each `(organization, subject)` pair has one
-membership row. If revoked/cross-issuer duplicates exist, `000002.down` raises and
-leaves schema and data untouched (the ledger becomes dirty). Merge duplicates, then
-`migrate force 2` and retry `down`. Never edit an applied migration; add a new one.
+`000002.down` is allowed only on an **empty** database. `000002` added issuer-qualified
+identity, revocation state, and audit provenance; dropping those columns from populated
+rows is semantic loss even when no row is deleted. Any row in any business table
+refuses the downgrade. A refused downgrade leaves schema and data untouched but marks
+the ledger dirty: inspect the v2 schema, then `migrate force 2`. For populated
+databases, prefer staying on v2 or a forward fix over downgrading.
+
+Never edit an applied migration; add a new one.
 
 ## Development identity provider and token
 
@@ -179,6 +186,7 @@ REQUIRE_DATABASE=1 go test ./...
 ## Known limitations / Phase 2
 
 - No production identity provider selected; the dev issuer is not production.
+- Downgrades of populated databases are refused rather than transformed.
 - Remote OIDC endpoints must be HTTPS; loopback HTTP is development-only.
 - No email lookup, invitation delivery, or self-service signup — owner supplies
   issuer/subject.

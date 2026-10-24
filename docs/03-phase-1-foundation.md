@@ -153,26 +153,68 @@ one read-only `REPEATABLE READ` transaction so both see the same snapshot.
   - the audit append-only trigger.
 - Legacy rows backfill `identity_issuer='legacy:unconfigured'` before the default is
   dropped.
-- The down migration deduplicates revoked/active identities before restoring the old
-  constraint.
+- The down migration runs only on an empty database and refuses populated ones before
+  any DDL.
 
-Use `go run ./cmd/migrate up|down|version|force N|baseline`. `baseline` refuses an
-empty, unrelated, already-versioned, or already-baselined database. Tests apply
-up/down/up on disposable databases and baseline a manually applied `000001` schema.
+Use `go run ./cmd/migrate up|down|version|force N|baseline --confirm`.
 
-Rollback refusal: the deprecated constraint is one membership per
-`(organization, subject)`. If multiple rows exist for a pair, `down` raises before any
-destructive change. The transaction leaves data and schema intact but marks the ledger
-dirty. Merge the duplicates, `force 2`, then retry. When no duplicates exist, rows are
-preserved and only `000002` columns/indexes are removed.
+### Downgrade policy
+
+`000002` may be reverted only while the database is empty. It introduced
+issuer-qualified identity, revocation state, and audit actor issuers; the level-1
+schema cannot represent them. Dropping those columns from populated rows is semantic
+loss even when row counts do not change. Any row in any of the thirteen business tables
+blocks the downgrade; nothing is deleted or transformed. A refused downgrade runs
+before all destructive DDL: PostgreSQL keeps schema and data intact, while
+golang-migrate marks the ledger dirty. Populated databases should normally stay on v2.
+
+An empty database downgrades successfully, can be fully reverted through `000001`, and
+re-applied.
+
+### Baseline policy
+
+`baseline` exists only to adopt the historic EC2 database whose `000001` was applied
+manually before the ledger existed. It requires `--confirm`, which attests that the
+operator inspected the target and intends to mark it manually migrated. Confirmation
+does not replace validation.
+
+Structural validation compares the live `public` catalogs with a golden manifest
+generated from `000001_initial.up.sql`: exact table and column sets, data types,
+nullability, defaults, primary/unique/foreign/check constraints, index definitions,
+triggers, and public functions. Extra or missing objects fail. Already-versioned
+databases, including dirty ledgers, fail; baseline never overwrites a version.
+
+It does not verify ownership, grants, collations, extensions, or schemas other than
+`public`, and it is not race-safe against concurrent migration processes. Run it
+offline. It never applies SQL or rewrites schema/data; on success only the ledger is
+written. `NewMigrator` may create an empty `schema_migrations` table even when
+validation fails; no version row is written.
+
+### Failed-migration runbook
+
+1. Stop other migration processes.
+2. Read `schema_migrations` (version and dirty) directly.
+3. Inspect the actual schema: `000002` objects should be present after a refused
+   downgrade.
+4. Verify business rows and the append-only trigger are intact.
+5. Confirm the failure happened at the precondition, before DDL.
+6. If the v2 schema is intact, repair bookkeeping with `migrate force 2`; otherwise
+   investigate before forcing.
+7. Re-run application checks before restoring traffic.
+
+`force` only writes metadata. Do not use it until schema state is verified.
 
 ## Verification performed
 
 On the EC2 host, against PostgreSQL 17.11:
 
-- `go test ./...`, `go test -race ./...`, `go vet ./...`, and `gofmt -l .` are clean.
-- `scripts/verify-integration.sh` (REQUIRE_DATABASE=1) reported 9 database, 25 HTTP,
+- `gofmt -l .`, `go vet ./...`, `go test ./...`, and `go test -race ./...` are clean.
+- `scripts/verify-integration.sh` (REQUIRE_DATABASE=1) reported 28 database, 25 HTTP,
   and 24 organization test/subtest passes with zero skips.
+- CLI scenarios on disposable databases: empty v1->v2->v1->v2 round-trip; populated
+  refusal with intact schema/data and dirty ledger, then `force 2` recovery; confirmed
+  baseline of a genuine `000001` schema followed by `up`; partial schema refused with
+  no version row. The persistent development database stayed at version 2, clean.
 - Required mode was also checked against an unreachable URL (fails, does not skip);
   default mode skips as documented.
 - Baseline CLI smoke: version-2 and empty databases are refused; a genuine manually
