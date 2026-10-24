@@ -1,5 +1,8 @@
 # VendorProof MVP — Acceptance criteria
 
+> Phase 1 status: authentication, organization tenancy, membership roles, audit events,
+> readiness, and migrations are implemented; see `docs/03-phase-1-foundation.md`.
+
 ## Personas
 
 - **Organization owner**: manages organization memberships and configuration.
