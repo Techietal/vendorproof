@@ -23,14 +23,29 @@ DROP INDEX memberships_identity_lookup;
 DROP INDEX memberships_organization_id_id_unique;
 DROP INDEX memberships_active_identity_unique;
 
--- The old constraint is per subject (not issuer) and only one row per subject
--- can survive. Keep an active row where possible, else the newest revoked one.
-DELETE FROM memberships m
-WHERE m.id NOT IN (
-    SELECT DISTINCT ON (organization_id, identity_subject) id
-    FROM memberships
-    ORDER BY organization_id, identity_subject, (revoked_at IS NULL) DESC, created_at DESC, id
-);
+-- The deprecated constraint is per subject, so rollback is lossless only when
+-- each (organization_id, identity_subject) pair has exactly one row. Refuse
+-- rather than silently deleting revoked/cross-issuer history. Because
+-- golang-migrate runs this file in one transaction, the schema stays intact.
+DO $$
+DECLARE duplicate_groups integer;
+BEGIN
+    SELECT count(*) INTO duplicate_groups
+    FROM (
+        SELECT 1
+        FROM memberships
+        GROUP BY organization_id, identity_subject
+        HAVING count(*) > 1
+    ) duplicates;
+
+    IF duplicate_groups > 0 THEN
+        RAISE EXCEPTION
+            'cannot roll back 000002 losslessly: % membership (organization, subject) group(s) have multiple rows',
+            duplicate_groups
+            USING HINT = 'Merge/delete duplicate memberships, then: migrate force 2 and migrate down.';
+    END IF;
+END;
+$$;
 
 ALTER TABLE memberships
     ADD CONSTRAINT memberships_organization_id_identity_subject_key

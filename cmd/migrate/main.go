@@ -3,12 +3,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
+	"vendorproof/internal/config"
 	"vendorproof/internal/database"
 )
 
@@ -64,7 +67,17 @@ func run() error {
 		return nil
 	case "baseline":
 		// 000001 was applied manually before migration tracking existed.
-		if err := m.Force(1); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		pool, err := database.Open(ctx, config.Database{
+			URL: url, MaxConns: 1, MinConns: 1, ConnectTimeout: 5 * time.Second,
+			MaxConnLifetime: time.Minute, MaxConnIdleTime: time.Minute,
+		})
+		if err != nil {
+			return err
+		}
+		defer pool.Close()
+		if err := database.Baseline(ctx, pool, m); err != nil {
 			return err
 		}
 		fmt.Println("baselined at version 1; run 'up' to apply forward migrations")
