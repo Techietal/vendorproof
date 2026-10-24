@@ -7,9 +7,11 @@
 5. **Lateness is derived:** outstanding contractor submission after due is late; internal review delay is not contractor late.
 6. **Document storage:** private object store; metadata in PostgreSQL. Upload first lands in quarantine, passes scan and validation, then becomes reviewable.
 7. **Idempotency:** obligation database unique constraints; notification unique delivery keys; transactional outbox for external sends.
-8. **Security:** OIDC authentication and organization-scoped RBAC; short-lived scoped upload grants; deny public bucket access. Postgres composite foreign keys help reject cross-organization references.
-9. **Auditability:** append-only actions, versioned submissions, human review decisions with reviewer ID/timestamp/reason.
-10. **Scope:** evidence collection and review, not legal-compliance certification. Regulatory requirement templates are administrator-defined.
+8. **Security:** OIDC access-token verification (issuer, audience, signature, algorithm, type), identity as `(issuer, subject)`, organization-scoped RBAC resolved per request from PostgreSQL, and 404 for cross-tenant probes. Short-lived scoped upload grants and private buckets follow. Postgres composite foreign keys reject cross-organization references.
+9. **Auditability:** append-only audit rows written in the business transaction; database trigger rejects update/delete; versioned submissions and human review decisions follow.
+10. **Membership lifecycle:** soft revocation keeps history and allows re-invitation; a partial unique index permits one active row per identity. Owner mutations lock the organization row so the last active owner cannot disappear.
+11. **Bootstrap:** the first owner is created by a local CLI against PostgreSQL, never an unauthenticated HTTP route.
+12. **Scope:** evidence collection and review, not legal-compliance certification. Regulatory requirement templates are administrator-defined.
 
 ## Unresolved before launch
 
