@@ -56,10 +56,14 @@ The API binds to `127.0.0.1` by default and is not internet-exposed.
 | `OIDC_ALLOWED_ALGORITHMS` | no | `RS256,ES256` | Signature algorithm allowlist |
 | `OIDC_REQUIRED_TOKEN_TYPE` | no | `at+jwt` | Accepted JOSE `typ`; `any` disables |
 | `OIDC_MIN_JWKS_REFRESH` / `OIDC_MAX_JWKS_REFRESH` | no | `1m` / `1h` | Refresh-rate clamp |
+| `OIDC_STALE_KEY_GRACE` | no | `15m` | Maximum use of cached keys after expiry while refresh fails |
 | `DB_MAX_CONNS` / `DB_MIN_CONNS` | no | `10` / `2` | Pool bounds |
 | `REQUEST_TIMEOUT` / `SHUTDOWN_TIMEOUT` | no | `15s` / `15s` | Request and drain bounds |
 | `MAX_BODY_BYTES` | no | `65536` | Body limit (413 beyond) |
 | `LOG_LEVEL` | no | `info` | Structured JSON log level |
+
+Issuer and JWKS URLs must use HTTPS unless the host is loopback (`localhost`,
+`127.0.0.1`, `::1`), where plain HTTP is accepted for the development issuer.
 
 ## Start PostgreSQL and apply migrations
 
@@ -79,8 +83,13 @@ go run ./cmd/migrate baseline   # records version 1 only
 go run ./cmd/migrate up         # applies forward migrations
 ```
 
-Fresh databases skip `baseline`. `down` reverts exactly one version. Never edit an
-applied migration; add a new one.
+`baseline` refuses an empty, already-versioned, or incompatible database. Fresh
+databases skip it. `down` reverts exactly one version.
+
+Rollback to `000001` is lossless only while each `(organization, subject)` pair has one
+membership row. If revoked/cross-issuer duplicates exist, `000002.down` raises and
+leaves schema and data untouched (the ledger becomes dirty). Merge duplicates, then
+`migrate force 2` and retry `down`. Never edit an applied migration; add a new one.
 
 ## Development identity provider and token
 
@@ -143,11 +152,20 @@ Integration tests create and drop their own `vp_test_*` databases. They use
 where the user must be able to create databases). With no reachable PostgreSQL they
 skip and say so; `-short` skips them intentionally.
 
+Acceptance runs must not skip silently. Set `REQUIRE_DATABASE=1` to fail instead of
+skip, and use the proof script, which also fails on any skip:
+
+```sh
+REQUIRE_DATABASE=1 go test ./...
+./scripts/verify-integration.sh
+```
+
 ## Security guarantees implemented
 
 - Identity comes only from a verified token (`iss` + `sub`); emails are not identity.
 - Exact issuer/audience, signature, algorithm, `typ`, `exp`, `nbf`, and subject checks.
-- JWKS caching is bounded, single-flighted, and survives transient provider outages.
+- JWKS caching is bounded, single-flighted, backoff-throttled during outages, and
+  stale keys expire after a fixed grace window.
 - Active membership is loaded from PostgreSQL on every protected request.
 - Non-members get `404`; members lacking a role get `403`.
 - Owner-only mutations; last-active-owner enforced under a row lock.
@@ -161,6 +179,7 @@ skip and say so; `-short` skips them intentionally.
 ## Known limitations / Phase 2
 
 - No production identity provider selected; the dev issuer is not production.
+- Remote OIDC endpoints must be HTTPS; loopback HTTP is development-only.
 - No email lookup, invitation delivery, or self-service signup — owner supplies
   issuer/subject.
 - No refresh-token revocation; access tokens remain cryptographically valid until

@@ -11,7 +11,8 @@ Every `/v1/*` route requires `Authorization: Bearer <access token>`. The verifie
 2. requires the configured JOSE `typ` (default `at+jwt`; `application/at+jwt` is also
    accepted);
 3. resolves `kid` from the configured JWKS, fetching and caching with a 1-minute floor
-   and 1-hour ceiling and single-flight refresh;
+   and 1-hour ceiling, single-flight refresh, and exponential retry backoff
+   (5 s doubling to 5 min) during provider failures;
 4. verifies the signature against RSA/EC/Ed25519 public keys with key-type checks;
 5. requires `exp`, validates `nbf`/`iat` when present, with 30 seconds of leeway;
 6. requires an exact issuer (one trailing slash tolerated) and the configured audience;
@@ -22,6 +23,9 @@ issuer in the schema; the same `sub` at two issuers is two identities. `email` i
 used for identity.
 
 ### Provider selection
+
+Remote issuer/JWKS URLs must be HTTPS. Plain HTTP is permitted only for loopback hosts
+so `cmd/devidp` works locally.
 
 No production provider has been chosen. Configure all three `OIDC_*` values explicitly;
 discovery documents are not fetched. The token shape must be checked against a real
@@ -98,6 +102,15 @@ trusted.
 Negative tests cover direct and indirect cross-tenant references at service and HTTP
 boundaries.
 
+## Stale key policy
+
+Cached signing keys are valid until the cache entry expires. After expiry, keys remain
+usable for at most `OIDC_STALE_KEY_GRACE` (default 15 minutes) while refresh keeps
+failing; beyond that, verification fails even though the provider may still be down.
+Failed refreshes back off exponentially (5 s to 5 min) and are reset by success, so an
+outage does not cause one outbound JWKS request per bearer token. Fetches remain
+single-flighted. Recovery is automatic on the first request after the backoff elapses.
+
 ## Last-owner invariant
 
 Every membership mutation begins with `SELECT ... FOR UPDATE` on the organization row.
@@ -119,6 +132,14 @@ append-only: a trigger rejects `UPDATE` and `DELETE`.
 The bootstrap creates an organization, so `organization.created` and
 `organization.bootstrapped` overlap in meaning; the latter adds provenance.
 
+## Concurrency between updates and revocation
+
+`PATCH /v1/organizations/{id}` takes the same organization row lock, before
+authorization, as membership mutations. A revocation that commits during an update
+therefore wins or loses as a unit — the update cannot proceed on a stale authorization
+read after revocation. Membership listing performs authorization and the data query in
+one read-only `REPEATABLE READ` transaction so both see the same snapshot.
+
 ## Migration strategy
 
 - Engine: `golang-migrate` as a library with embedded files and
@@ -135,14 +156,29 @@ The bootstrap creates an organization, so `organization.created` and
 - The down migration deduplicates revoked/active identities before restoring the old
   constraint.
 
-Use `go run ./cmd/migrate up|down|version|force N|baseline`. Tests apply up/down/up on
-disposable databases and baseline a manually applied `000001` schema.
+Use `go run ./cmd/migrate up|down|version|force N|baseline`. `baseline` refuses an
+empty, unrelated, already-versioned, or already-baselined database. Tests apply
+up/down/up on disposable databases and baseline a manually applied `000001` schema.
+
+Rollback refusal: the deprecated constraint is one membership per
+`(organization, subject)`. If multiple rows exist for a pair, `down` raises before any
+destructive change. The transaction leaves data and schema intact but marks the ledger
+dirty. Merge the duplicates, `force 2`, then retry. When no duplicates exist, rows are
+preserved and only `000002` columns/indexes are removed.
 
 ## Verification performed
 
 On the EC2 host, against PostgreSQL 17.11:
 
-- `go test ./...`, `go test -race ./...`, `go vet ./...` passed.
+- `go test ./...`, `go test -race ./...`, `go vet ./...`, and `gofmt -l .` are clean.
+- `scripts/verify-integration.sh` (REQUIRE_DATABASE=1) reported 9 database, 25 HTTP,
+  and 24 organization test/subtest passes with zero skips.
+- Required mode was also checked against an unreachable URL (fails, does not skip);
+  default mode skips as documented.
+- Baseline CLI smoke: version-2 and empty databases are refused; a genuine manually
+  applied `000001` schema baselines and advances to version 2.
+- Outage, stale-expiry, recovery, lock-ordering, snapshot, and rollback-refusal tests
+  are deterministic.
 - Migration up/down/up and manual baseline passed in disposable databases.
 - Bootstrap CLI, live/ready, `/v1/me`, organization read/update, membership add,
   manager 403, revocation 204 -> repeat 409 -> revoked 404, last-owner 409, and audit
@@ -155,7 +191,9 @@ On the EC2 host, against PostgreSQL 17.11:
   immediately because membership state is per-request.
 - No HTTP organization creation, invitations, email discovery, or signup.
 - No JWT introspection, token revocation endpoint, or proof-of-possession.
-- In-process JWKS cache; multiple replicas each fetch independently.
+- In-process JWKS cache; multiple replicas each fetch independently. Stale keys are
+  bounded but a prolonged provider outage eventually causes authentication failures by
+  design.
 - No RLS. Application SQL plus constraints enforce isolation.
 - No rate limiting, TLS, proxy trust, metrics, or tracing.
 - Audit actors are strings, not foreign keys; identities can disappear from the
@@ -164,6 +202,13 @@ On the EC2 host, against PostgreSQL 17.11:
 - Pagination is forward-only and capped at 200.
 - Bootstrap requires direct database/CLI access on the host.
 - Provider requirements above remain unverified until a real provider is selected.
+
+## Required database mode
+
+Integration helpers skip when PostgreSQL is unreachable by default. Acceptance runs set
+`REQUIRE_DATABASE=1` (fail-hard) and execute `scripts/verify-integration.sh`, which
+parses `go test -json` and fails if any database-dependent test skipped or a package
+executed no tests.
 
 ## Phase 2 prerequisites
 
