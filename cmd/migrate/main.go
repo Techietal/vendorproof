@@ -67,6 +67,15 @@ func run() error {
 		return nil
 	case "baseline":
 		// 000001 was applied manually before migration tracking existed.
+		confirmed := false
+		for _, arg := range flag.Args()[1:] {
+			switch arg {
+			case "--confirm", "-confirm":
+				confirmed = true
+			default:
+				return fmt.Errorf("baseline: unknown argument %q (expected --confirm)", arg)
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		pool, err := database.Open(ctx, config.Database{
@@ -77,7 +86,7 @@ func run() error {
 			return err
 		}
 		defer pool.Close()
-		if err := database.Baseline(ctx, pool, m); err != nil {
+		if err := database.Baseline(ctx, pool, m, confirmed); err != nil {
 			return err
 		}
 		fmt.Println("baselined at version 1; run 'up' to apply forward migrations")
@@ -105,7 +114,8 @@ commands:
   down        revert one migration
   version     show the recorded version
   force N     record version N without executing SQL
-  baseline    mark the manually applied initial schema as version 1
+  baseline --confirm
+              verify the exact manually applied initial schema and record version 1
 
 DATABASE_URL is required. Baseline an existing database before the first "up".
 `)

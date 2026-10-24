@@ -1,0 +1,1128 @@
+{
+  "tables": {
+    "audit_events": {
+      "columns": [
+        {
+          "name": "action",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "actor_subject",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "details",
+          "type": "jsonb",
+          "not_null": true,
+          "default": "'{}'::jsonb"
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "resource_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "resource_type",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "audit_events_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "audit_events_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "audit_events_by_org_time",
+          "kind": "",
+          "definition": "CREATE INDEX audit_events_by_org_time ON public.audit_events USING btree (organization_id, created_at DESC)"
+        },
+        {
+          "name": "audit_events_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX audit_events_pkey ON public.audit_events USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "contractors": {
+      "columns": [
+        {
+          "name": "contact_email",
+          "type": "text",
+          "not_null": false,
+          "default": ""
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "is_active",
+          "type": "boolean",
+          "not_null": true,
+          "default": "true"
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "contractors_name_check",
+          "kind": "c",
+          "definition": "CHECK ((btrim(name) \u003c\u003e ''::text))"
+        },
+        {
+          "name": "contractors_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "contractors_organization_id_id_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, id)"
+        },
+        {
+          "name": "contractors_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "contractors_organization_id_id_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX contractors_organization_id_id_key ON public.contractors USING btree (organization_id, id)"
+        },
+        {
+          "name": "contractors_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX contractors_pkey ON public.contractors USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "documents": {
+      "columns": [
+        {
+          "name": "content_type",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "file_name",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "object_key",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "scan_status",
+          "type": "text",
+          "not_null": true,
+          "default": "'pending'::text"
+        },
+        {
+          "name": "sha256",
+          "type": "character(64)",
+          "not_null": false,
+          "default": ""
+        },
+        {
+          "name": "size_bytes",
+          "type": "bigint",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "documents_object_key_key",
+          "kind": "u",
+          "definition": "UNIQUE (object_key)"
+        },
+        {
+          "name": "documents_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "documents_organization_id_id_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, id)"
+        },
+        {
+          "name": "documents_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "documents_scan_status_check",
+          "kind": "c",
+          "definition": "CHECK ((scan_status = ANY (ARRAY['pending'::text, 'clean'::text, 'blocked'::text])))"
+        },
+        {
+          "name": "documents_size_bytes_check",
+          "kind": "c",
+          "definition": "CHECK ((size_bytes \u003e 0))"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "documents_object_key_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX documents_object_key_key ON public.documents USING btree (object_key)"
+        },
+        {
+          "name": "documents_organization_id_id_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX documents_organization_id_id_key ON public.documents USING btree (organization_id, id)"
+        },
+        {
+          "name": "documents_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX documents_pkey ON public.documents USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "engagements": {
+      "columns": [
+        {
+          "name": "active_from",
+          "type": "date",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "active_until",
+          "type": "date",
+          "not_null": false,
+          "default": ""
+        },
+        {
+          "name": "contractor_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "site_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "engagements_check",
+          "kind": "c",
+          "definition": "CHECK (((active_until IS NULL) OR (active_until \u003e active_from)))"
+        },
+        {
+          "name": "engagements_organization_id_contractor_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id, contractor_id) REFERENCES contractors(organization_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "engagements_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "engagements_organization_id_id_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, id)"
+        },
+        {
+          "name": "engagements_organization_id_site_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id, site_id) REFERENCES sites(organization_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "engagements_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "engagements_organization_id_id_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX engagements_organization_id_id_key ON public.engagements USING btree (organization_id, id)"
+        },
+        {
+          "name": "engagements_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX engagements_pkey ON public.engagements USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "memberships": {
+      "columns": [
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "identity_subject",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "memberships_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "memberships_organization_id_identity_subject_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, identity_subject)"
+        },
+        {
+          "name": "memberships_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "memberships_role_check",
+          "kind": "c",
+          "definition": "CHECK ((role = ANY (ARRAY['owner'::text, 'manager'::text, 'reviewer'::text])))"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "memberships_organization_id_identity_subject_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX memberships_organization_id_identity_subject_key ON public.memberships USING btree (organization_id, identity_subject)"
+        },
+        {
+          "name": "memberships_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX memberships_pkey ON public.memberships USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "notification_deliveries": {
+      "columns": [
+        {
+          "name": "attempts",
+          "type": "integer",
+          "not_null": true,
+          "default": "0"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "destination",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "event_key",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "notification_deliveries_attempts_check",
+          "kind": "c",
+          "definition": "CHECK ((attempts \u003e= 0))"
+        },
+        {
+          "name": "notification_deliveries_organization_id_event_key_destinati_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, event_key, destination)"
+        },
+        {
+          "name": "notification_deliveries_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "notification_deliveries_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "notification_deliveries_status_check",
+          "kind": "c",
+          "definition": "CHECK ((status = ANY (ARRAY['queued'::text, 'sent'::text, 'failed'::text])))"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "notification_deliveries_organization_id_event_key_destinati_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX notification_deliveries_organization_id_event_key_destinati_key ON public.notification_deliveries USING btree (organization_id, event_key, destination)"
+        },
+        {
+          "name": "notification_deliveries_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX notification_deliveries_pkey ON public.notification_deliveries USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "obligations": {
+      "columns": [
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "due_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "engagement_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "period_end",
+          "type": "date",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "period_start",
+          "type": "date",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "requirement_version_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "obligations_check",
+          "kind": "c",
+          "definition": "CHECK ((period_end \u003e period_start))"
+        },
+        {
+          "name": "obligations_organization_id_engagement_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id, engagement_id) REFERENCES engagements(organization_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "obligations_organization_id_engagement_id_requirement_versi_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, engagement_id, requirement_version_id, period_start)"
+        },
+        {
+          "name": "obligations_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "obligations_organization_id_id_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, id)"
+        },
+        {
+          "name": "obligations_organization_id_requirement_version_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id, requirement_version_id) REFERENCES requirement_versions(organization_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "obligations_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "obligations_due",
+          "kind": "",
+          "definition": "CREATE INDEX obligations_due ON public.obligations USING btree (organization_id, due_at)"
+        },
+        {
+          "name": "obligations_engagement_period",
+          "kind": "",
+          "definition": "CREATE INDEX obligations_engagement_period ON public.obligations USING btree (organization_id, engagement_id, period_start)"
+        },
+        {
+          "name": "obligations_organization_id_engagement_id_requirement_versi_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX obligations_organization_id_engagement_id_requirement_versi_key ON public.obligations USING btree (organization_id, engagement_id, requirement_version_id, period_start)"
+        },
+        {
+          "name": "obligations_organization_id_id_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX obligations_organization_id_id_key ON public.obligations USING btree (organization_id, id)"
+        },
+        {
+          "name": "obligations_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX obligations_pkey ON public.obligations USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "organizations": {
+      "columns": [
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "organizations_name_check",
+          "kind": "c",
+          "definition": "CHECK ((btrim(name) \u003c\u003e ''::text))"
+        },
+        {
+          "name": "organizations_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "organizations_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX organizations_pkey ON public.organizations USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "requirement_assignments": {
+      "columns": [
+        {
+          "name": "assigned_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "engagement_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "requirement_version_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "requirement_assignments_organization_id_engagement_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id, engagement_id) REFERENCES engagements(organization_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "requirement_assignments_organization_id_engagement_id_requi_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, engagement_id, requirement_version_id)"
+        },
+        {
+          "name": "requirement_assignments_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "requirement_assignments_organization_id_requirement_versio_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id, requirement_version_id) REFERENCES requirement_versions(organization_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "requirement_assignments_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "requirement_assignments_organization_id_engagement_id_requi_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX requirement_assignments_organization_id_engagement_id_requi_key ON public.requirement_assignments USING btree (organization_id, engagement_id, requirement_version_id)"
+        },
+        {
+          "name": "requirement_assignments_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX requirement_assignments_pkey ON public.requirement_assignments USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "requirement_versions": {
+      "columns": [
+        {
+          "name": "cadence",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "due_day",
+          "type": "integer",
+          "not_null": false,
+          "default": ""
+        },
+        {
+          "name": "effective_from",
+          "type": "date",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "effective_until",
+          "type": "date",
+          "not_null": false,
+          "default": ""
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "requirement_key",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "requirement_versions_cadence_check",
+          "kind": "c",
+          "definition": "CHECK ((cadence = ANY (ARRAY['monthly'::text, 'expiry'::text])))"
+        },
+        {
+          "name": "requirement_versions_check",
+          "kind": "c",
+          "definition": "CHECK (((effective_until IS NULL) OR (effective_until \u003e effective_from)))"
+        },
+        {
+          "name": "requirement_versions_check1",
+          "kind": "c",
+          "definition": "CHECK ((((cadence = 'monthly'::text) AND (due_day IS NOT NULL)) OR ((cadence = 'expiry'::text) AND (due_day IS NULL))))"
+        },
+        {
+          "name": "requirement_versions_due_day_check",
+          "kind": "c",
+          "definition": "CHECK (((due_day \u003e= 1) AND (due_day \u003c= 31)))"
+        },
+        {
+          "name": "requirement_versions_name_check",
+          "kind": "c",
+          "definition": "CHECK ((btrim(name) \u003c\u003e ''::text))"
+        },
+        {
+          "name": "requirement_versions_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "requirement_versions_organization_id_id_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, id)"
+        },
+        {
+          "name": "requirement_versions_organization_id_requirement_key_versio_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, requirement_key, version)"
+        },
+        {
+          "name": "requirement_versions_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "requirement_versions_version_check",
+          "kind": "c",
+          "definition": "CHECK ((version \u003e 0))"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "requirement_versions_organization_id_id_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX requirement_versions_organization_id_id_key ON public.requirement_versions USING btree (organization_id, id)"
+        },
+        {
+          "name": "requirement_versions_organization_id_requirement_key_versio_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX requirement_versions_organization_id_requirement_key_versio_key ON public.requirement_versions USING btree (organization_id, requirement_key, version)"
+        },
+        {
+          "name": "requirement_versions_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX requirement_versions_pkey ON public.requirement_versions USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "reviews": {
+      "columns": [
+        {
+          "name": "decision",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "identity_subject",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "not_null": false,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "reviewed_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "submission_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "reviews_decision_check",
+          "kind": "c",
+          "definition": "CHECK ((decision = ANY (ARRAY['accepted'::text, 'needs_correction'::text])))"
+        },
+        {
+          "name": "reviews_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "reviews_organization_id_submission_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id, submission_id) REFERENCES submissions(organization_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "reviews_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "reviews_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX reviews_pkey ON public.reviews USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "sites": {
+      "columns": [
+        {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        }
+      ],
+      "constraints": [
+        {
+          "name": "sites_name_check",
+          "kind": "c",
+          "definition": "CHECK ((btrim(name) \u003c\u003e ''::text))"
+        },
+        {
+          "name": "sites_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "sites_organization_id_id_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, id)"
+        },
+        {
+          "name": "sites_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "sites_organization_id_id_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX sites_organization_id_id_key ON public.sites USING btree (organization_id, id)"
+        },
+        {
+          "name": "sites_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX sites_pkey ON public.sites USING btree (id)"
+        }
+      ],
+      "triggers": []
+    },
+    "submissions": {
+      "columns": [
+        {
+          "name": "attempt",
+          "type": "integer",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "document_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "obligation_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "organization_id",
+          "type": "uuid",
+          "not_null": true,
+          "default": ""
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "not_null": true,
+          "default": "'awaiting_review'::text"
+        },
+        {
+          "name": "submitted_at",
+          "type": "timestamp with time zone",
+          "not_null": true,
+          "default": "now()"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "submissions_attempt_check",
+          "kind": "c",
+          "definition": "CHECK ((attempt \u003e= 1))"
+        },
+        {
+          "name": "submissions_organization_id_document_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id, document_id) REFERENCES documents(organization_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "submissions_organization_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id) REFERENCES organizations(id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "submissions_organization_id_id_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, id)"
+        },
+        {
+          "name": "submissions_organization_id_obligation_id_attempt_key",
+          "kind": "u",
+          "definition": "UNIQUE (organization_id, obligation_id, attempt)"
+        },
+        {
+          "name": "submissions_organization_id_obligation_id_fkey",
+          "kind": "f",
+          "definition": "FOREIGN KEY (organization_id, obligation_id) REFERENCES obligations(organization_id, id) ON DELETE RESTRICT"
+        },
+        {
+          "name": "submissions_pkey",
+          "kind": "p",
+          "definition": "PRIMARY KEY (id)"
+        },
+        {
+          "name": "submissions_state_check",
+          "kind": "c",
+          "definition": "CHECK ((state = ANY (ARRAY['awaiting_review'::text, 'needs_correction'::text, 'accepted'::text])))"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "submissions_by_obligation",
+          "kind": "",
+          "definition": "CREATE INDEX submissions_by_obligation ON public.submissions USING btree (organization_id, obligation_id, submitted_at DESC)"
+        },
+        {
+          "name": "submissions_organization_id_id_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX submissions_organization_id_id_key ON public.submissions USING btree (organization_id, id)"
+        },
+        {
+          "name": "submissions_organization_id_obligation_id_attempt_key",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX submissions_organization_id_obligation_id_attempt_key ON public.submissions USING btree (organization_id, obligation_id, attempt)"
+        },
+        {
+          "name": "submissions_pkey",
+          "kind": "",
+          "definition": "CREATE UNIQUE INDEX submissions_pkey ON public.submissions USING btree (id)"
+        }
+      ],
+      "triggers": []
+    }
+  },
+  "functions": []
+}
