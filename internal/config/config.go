@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -49,6 +50,7 @@ type OIDC struct {
 	RequiredTokenType string
 	MinJWKSRefresh    time.Duration
 	MaxJWKSRefresh    time.Duration
+	StaleKeyGrace     time.Duration
 	JWKSFetchTimeout  time.Duration
 }
 
@@ -91,6 +93,7 @@ func Load() (Config, error) {
 			RequiredTokenType: strings.TrimSpace(os.Getenv("OIDC_REQUIRED_TOKEN_TYPE")),
 			MinJWKSRefresh:    durationEnv("OIDC_MIN_JWKS_REFRESH", time.Minute, fail),
 			MaxJWKSRefresh:    durationEnv("OIDC_MAX_JWKS_REFRESH", time.Hour, fail),
+			StaleKeyGrace:     durationEnv("OIDC_STALE_KEY_GRACE", 15*time.Minute, fail),
 			JWKSFetchTimeout:  durationEnv("OIDC_JWKS_TIMEOUT", 5*time.Second, fail),
 		},
 	}
@@ -119,12 +122,12 @@ func Load() (Config, error) {
 		}
 	}
 	if cfg.OIDC.Issuer != "" {
-		if err := validateHTTPURL(cfg.OIDC.Issuer); err != nil {
+		if err := validateOIDCURL(cfg.OIDC.Issuer); err != nil {
 			fail("OIDC_ISSUER: %v", err)
 		}
 	}
 	if cfg.OIDC.JWKSURL != "" {
-		if err := validateHTTPURL(cfg.OIDC.JWKSURL); err != nil {
+		if err := validateOIDCURL(cfg.OIDC.JWKSURL); err != nil {
 			fail("OIDC_JWKS_URL: %v", err)
 		}
 	}
@@ -157,6 +160,9 @@ func Load() (Config, error) {
 	}
 	if cfg.OIDC.MinJWKSRefresh <= 0 || cfg.OIDC.MaxJWKSRefresh < cfg.OIDC.MinJWKSRefresh {
 		fail("OIDC JWKS refresh bounds are invalid")
+	}
+	if cfg.OIDC.StaleKeyGrace <= 0 {
+		fail("OIDC_STALE_KEY_GRACE must be positive")
 	}
 
 	if len(errs) > 0 {
@@ -255,6 +261,27 @@ func validateHTTPURL(raw string) error {
 		return errors.New("must not contain credentials, query, or fragment")
 	}
 	return nil
+}
+
+// validateOIDCURL requires HTTPS for anything remote. Plain HTTP is allowed
+// only for loopback so the local development issuer works without TLS.
+func validateOIDCURL(raw string) error {
+	if err := validateHTTPURL(raw); err != nil {
+		return err
+	}
+	u, _ := url.Parse(raw)
+	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		return errors.New("remote issuer and JWKS URLs must use https")
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func supportedAlgorithm(alg string) bool {

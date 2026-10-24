@@ -31,6 +31,11 @@ type Verifier struct {
 
 // NewVerifier builds a verifier with a bounded, caching JWKS client.
 func NewVerifier(cfg config.OIDC) (*Verifier, error) {
+	return NewVerifierWithClock(cfg, time.Now)
+}
+
+// NewVerifierWithClock is NewVerifier with an injectable clock for tests.
+func NewVerifierWithClock(cfg config.OIDC, now func() time.Time) (*Verifier, error) {
 	if cfg.Issuer == "" || cfg.Audience == "" || cfg.JWKSURL == "" {
 		return nil, errors.New("issuer, audience, and JWKS URL are required")
 	}
@@ -42,13 +47,12 @@ func NewVerifier(cfg config.OIDC) (*Verifier, error) {
 		allowed[alg] = true
 	}
 	client := &http.Client{Timeout: cfg.JWKSFetchTimeout}
-	now := time.Now
 	v := &Verifier{
 		issuer:      identity.NormalizeIssuer(cfg.Issuer),
 		audience:    cfg.Audience,
 		requiredTyp: cfg.RequiredTokenType,
 		allowedAlgs: allowed,
-		keys:        newKeyCache(cfg.JWKSURL, client, allowed, cfg.MinJWKSRefresh, cfg.MaxJWKSRefresh, now),
+		keys:        newKeyCache(cfg.JWKSURL, client, allowed, cfg.MinJWKSRefresh, cfg.MaxJWKSRefresh, cfg.StaleKeyGrace, now),
 		now:         now,
 	}
 	v.parser = jwt.NewParser(

@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -217,5 +218,101 @@ func TestExpiredCacheRefreshes(t *testing.T) {
 func TestNewVerifierValidation(t *testing.T) {
 	if _, err := NewVerifier(config.OIDC{}); err == nil {
 		t.Fatal("empty config accepted")
+	}
+}
+
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
+}
+
+func TestOutageBackoffAndBoundedStaleness(t *testing.T) {
+	signer := testjwks.New(t)
+	clock := &fakeClock{t: time.Now()}
+	cfg := config.OIDC{
+		Issuer: signer.Issuer, Audience: audience, JWKSURL: signer.URL(),
+		AllowedAlgorithms: []string{"RS256"}, RequiredTokenType: "at+jwt",
+		MinJWKSRefresh: time.Millisecond, MaxJWKSRefresh: 20 * time.Millisecond,
+		StaleKeyGrace: time.Minute, JWKSFetchTimeout: time.Second,
+	}
+	v, err := NewVerifierWithClock(cfg, clock.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Keep the outage backoff long enough to remain active during the test.
+	v.keys.retryBase = 10 * time.Minute
+	v.keys.retryMax = 10 * time.Minute
+
+	claims := testjwks.Claims("user")
+	claims["exp"] = clock.Now().Add(2 * time.Hour).Unix()
+	token := signer.Sign(claims)
+	if _, err := v.Verify(context.Background(), token); err != nil {
+		t.Fatal(err)
+	}
+	if signer.Fetches() != 1 {
+		t.Fatalf("initial fetches = %d", signer.Fetches())
+	}
+
+	clock.Advance(30 * time.Millisecond) // cache expired
+	signer.Fail(true)
+
+	// Concurrent requests after expiry must produce exactly one fetch attempt
+	// while continuing to verify with bounded stale keys.
+	var wg sync.WaitGroup
+	errs := make(chan error, 16)
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := v.Verify(context.Background(), token)
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("stale verification failed: %v", err)
+		}
+	}
+	if got := signer.Fetches(); got != 2 {
+		t.Fatalf("fetches during outage = %d, want 1 attempt", got)
+	}
+
+	// Beyond the stale window, verification fails; backoff still suppresses
+	// one fetch per token.
+	clock.Advance(61 * time.Second)
+	for i := 0; i < 5; i++ {
+		if _, err := v.Verify(context.Background(), token); !errors.Is(err, ErrInvalidToken) {
+			t.Fatalf("stale key accepted: %v", err)
+		}
+	}
+	if got := signer.Fetches(); got != 2 {
+		t.Fatalf("fetches after stale expiry = %d, want 2", got)
+	}
+
+	// Recovery after backoff refreshes and resets the window.
+	clock.Advance(10 * time.Minute)
+	signer.Fail(false)
+	if _, err := v.Verify(context.Background(), token); err != nil {
+		t.Fatalf("recovery failed: %v", err)
+	}
+	if got := signer.Fetches(); got != 3 {
+		t.Fatalf("fetches after recovery = %d, want 3", got)
+	}
+	if _, err := v.Verify(context.Background(), token); err != nil {
+		t.Fatal(err)
 	}
 }

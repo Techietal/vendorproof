@@ -21,80 +21,121 @@ import (
 
 const maxJWKSBytes = 1 << 20
 
-var errUnknownKey = errors.New("token signing key is unknown")
+var (
+	errUnknownKey = errors.New("token signing key is unknown")
+	errStaleKeys  = errors.New("cached JWKS exceeded its stale-usage window")
+)
+
+const (
+	defaultStaleKeyGrace = 15 * time.Minute
+	defaultJWKSRetryBase = 5 * time.Second
+	defaultJWKSRetryMax  = 5 * time.Minute
+)
 
 // keySet is an immutable snapshot of verified public keys.
 type keySet map[string]any
 
-// keyCache fetches and caches a JWKS. Fetches are single-flighted and rate
-// limited so an unknown-kid token cannot hammer the identity provider.
+// keyCache fetches and caches a JWKS.
+//
+// Cached keys are used until expiresAt, then for at most staleGrace longer
+// while refreshes fail. Failed refreshes are retried with exponential backoff,
+// so an outage cannot trigger one outbound request per incoming token. Fetches
+// are single-flighted. After staleGrace a cached key is rejected even if the
+// provider is still unreachable.
 type keyCache struct {
-	url            string
-	client         *http.Client
-	allowedAlgs    map[string]bool
-	minRefresh     time.Duration
-	maxRefresh     time.Duration
-	unknownKeyWait time.Duration
-	now            func() time.Time
+	url         string
+	client      *http.Client
+	allowedAlgs map[string]bool
+	minRefresh  time.Duration
+	maxRefresh  time.Duration
+	staleGrace  time.Duration
+	retryBase   time.Duration
+	retryMax    time.Duration
+	now         func() time.Time
 
-	fetchMu    sync.Mutex
-	mu         sync.RWMutex
-	keys       keySet
-	lastFetch  time.Time
-	lastFailed time.Time
-	expiresAt  time.Time
+	fetchMu   sync.Mutex
+	mu        sync.RWMutex
+	keys      keySet
+	lastFetch time.Time
+	expiresAt time.Time
+	nextRetry time.Time
+	backoff   time.Duration
 }
 
-func newKeyCache(url string, client *http.Client, allowedAlgs map[string]bool, minRefresh, maxRefresh time.Duration, now func() time.Time) *keyCache {
+func newKeyCache(url string, client *http.Client, allowedAlgs map[string]bool, minRefresh, maxRefresh, staleGrace time.Duration, now func() time.Time) *keyCache {
+	if staleGrace <= 0 {
+		staleGrace = defaultStaleKeyGrace
+	}
 	return &keyCache{
 		url: url, client: client, allowedAlgs: allowedAlgs,
-		minRefresh: minRefresh, maxRefresh: maxRefresh,
-		unknownKeyWait: 10 * time.Second, now: now,
+		minRefresh: minRefresh, maxRefresh: maxRefresh, staleGrace: staleGrace,
+		retryBase: defaultJWKSRetryBase, retryMax: defaultJWKSRetryMax, now: now,
 	}
 }
 
-// key returns the key for kid, refreshing an empty/expired cache or after an
-// unknown kid. A previously cached key remains usable until its cache entry
-// expires if the provider is temporarily unreachable.
+// key returns the key for kid. It refreshes when the cache is empty, expired,
+// or does not contain kid, subject to backoff. A cached key remains usable
+// only within expiry plus staleGrace.
 func (c *keyCache) key(ctx context.Context, kid string) (any, error) {
 	if kid == "" {
 		return nil, errors.New("token has no kid header")
 	}
-	if c.isExpired() {
-		// Expiry is the normal rotation path; failure falls through to the
-		// still-cached keys rather than rejecting valid tokens.
-		_ = c.refresh(ctx, false)
-	}
-	if key, ok := c.lookup(kid); ok {
-		return key, nil
-	}
-	if err := c.refresh(ctx, true); err != nil {
-		if key, ok := c.lookup(kid); ok {
+	now := c.now()
+	expired := c.isExpired(now)
+	if expired {
+		// Always attempt a normal rotation refresh; backoff makes this cheap
+		// during an outage and stale keys keep verification working.
+		fetchErr := c.refresh(ctx, false)
+		if key, ok := c.lookupUsable(kid, now); ok {
 			return key, nil
 		}
-		return nil, fmt.Errorf("refresh JWKS: %w", err)
+		if c.hasKey(kid) {
+			return nil, errStaleKeys
+		}
+		if fetchErr != nil {
+			return nil, fmt.Errorf("refresh JWKS: %w", fetchErr)
+		}
+		return nil, errUnknownKey
 	}
-	if key, ok := c.lookup(kid); ok {
+	if key, ok := c.lookupUsable(kid, now); ok {
 		return key, nil
+	}
+	// Fresh cache, unknown kid: this may be a rotation.
+	fetchErr := c.refresh(ctx, true)
+	if key, ok := c.lookupUsable(kid, now); ok {
+		return key, nil
+	}
+	if fetchErr != nil {
+		return nil, fmt.Errorf("refresh JWKS: %w", fetchErr)
 	}
 	return nil, errUnknownKey
 }
 
-func (c *keyCache) isExpired() bool {
+func (c *keyCache) isExpired(now time.Time) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return !c.now().Before(c.expiresAt)
+	return !now.Before(c.expiresAt)
 }
 
-func (c *keyCache) lookup(kid string) (any, bool) {
+func (c *keyCache) lookupUsable(kid string, now time.Time) (any, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	key, ok := c.keys[kid]
-	return key, ok
+	if !ok || !now.Before(c.expiresAt.Add(c.staleGrace)) {
+		return nil, false
+	}
+	return key, true
+}
+
+func (c *keyCache) hasKey(kid string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	_, ok := c.keys[kid]
+	return ok
 }
 
 // refresh fetches a new key set. forced controls whether the minimum interval
-// applies (initial load and expiry are always allowed).
+// applies. Backoff applies to every attempt after a failure.
 func (c *keyCache) refresh(ctx context.Context, forced bool) error {
 	c.fetchMu.Lock()
 	defer c.fetchMu.Unlock()
@@ -103,25 +144,32 @@ func (c *keyCache) refresh(ctx context.Context, forced bool) error {
 	c.mu.RLock()
 	haveKeys := len(c.keys) > 0
 	lastFetch := c.lastFetch
-	lastFailed := c.lastFailed
+	nextRetry := c.nextRetry
 	expired := !now.Before(c.expiresAt)
 	c.mu.RUnlock()
 
 	if haveKeys && !expired && !forced {
 		return nil
 	}
-	if forced && now.Sub(lastFetch) < c.minRefresh && !expired {
+	if forced && !expired && now.Sub(lastFetch) < c.minRefresh {
 		return nil
 	}
-	// Do not retry a failed provider more than once per unknown-key window.
-	if !haveKeys && now.Sub(lastFailed) < c.unknownKeyWait {
-		return errors.New("JWKS fetch recently failed")
+	if now.Before(nextRetry) {
+		return nil
 	}
 
 	keys, maxAge, err := c.fetch(ctx)
 	if err != nil {
 		c.mu.Lock()
-		c.lastFailed = now
+		if c.backoff <= 0 {
+			c.backoff = c.retryBase
+		} else {
+			c.backoff *= 2
+			if c.backoff > c.retryMax {
+				c.backoff = c.retryMax
+			}
+		}
+		c.nextRetry = now.Add(c.backoff)
 		c.mu.Unlock()
 		return err
 	}
@@ -138,6 +186,8 @@ func (c *keyCache) refresh(ctx context.Context, forced bool) error {
 	c.keys = keys
 	c.lastFetch = now
 	c.expiresAt = now.Add(maxAge)
+	c.backoff = 0
+	c.nextRetry = time.Time{}
 	c.mu.Unlock()
 	return nil
 }

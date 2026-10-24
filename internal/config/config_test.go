@@ -37,6 +37,17 @@ func TestLoadValid(t *testing.T) {
 	}
 }
 
+func TestLoopbackHTTPAllowed(t *testing.T) {
+	for _, host := range []string{"127.0.0.1", "localhost", "[::1]"} {
+		setValid(t)
+		t.Setenv("OIDC_ISSUER", "http://"+host+":9000")
+		t.Setenv("OIDC_JWKS_URL", "http://"+host+":9000/jwks")
+		if _, err := Load(); err != nil {
+			t.Errorf("%s rejected: %v", host, err)
+		}
+	}
+}
+
 func TestLoadPortCompatibility(t *testing.T) {
 	setValid(t)
 	t.Setenv("PORT", "9090")
@@ -72,7 +83,8 @@ func TestLoadRejectsInvalid(t *testing.T) {
 			t.Setenv("DB_MAX_CONNS", "2")
 			t.Setenv("DB_MIN_CONNS", "3")
 		},
-		"bad token type": func(t *testing.T) { t.Setenv("OIDC_REQUIRED_TOKEN_TYPE", "id+token") },
+		"bad token type":  func(t *testing.T) { t.Setenv("OIDC_REQUIRED_TOKEN_TYPE", "id+token") },
+		"bad stale grace": func(t *testing.T) { t.Setenv("OIDC_STALE_KEY_GRACE", "0s") },
 		"refresh bounds inverted": func(t *testing.T) {
 			t.Setenv("OIDC_MIN_JWKS_REFRESH", "2h")
 			t.Setenv("OIDC_MAX_JWKS_REFRESH", "1h")

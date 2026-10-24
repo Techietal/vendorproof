@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ type Signer struct {
 	kid     string
 	served  map[string]*rsa.PublicKey
 	fetches int
+	failing atomic.Bool
 }
 
 // New starts a JWKS server with a fresh RSA key. Cleanup is automatic.
@@ -46,6 +48,12 @@ func (s *Signer) handle(w http.ResponseWriter, _ *http.Request) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.fetches++
+	if s.failing.Load() {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unavailable"})
+		return
+	}
 	keys := make([]map[string]string, 0, len(s.served))
 	for kid, pub := range s.served {
 		keys = append(keys, map[string]string{
@@ -103,6 +111,9 @@ func (s *Signer) RemoveServed() {
 	defer s.mu.Unlock()
 	s.served = map[string]*rsa.PublicKey{}
 }
+
+// Fail toggles a 503 response for subsequent JWKS requests.
+func (s *Signer) Fail(fail bool) { s.failing.Store(fail) }
 
 // Fetches reports how many JWKS requests have been served.
 func (s *Signer) Fetches() int {
