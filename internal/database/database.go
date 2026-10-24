@@ -71,6 +71,33 @@ func WithTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) erro
 	return nil
 }
 
+// WithReadTx runs fn in a read-only, repeatable-read transaction so multiple
+// statements observe one snapshot. It is used where an authorization read and
+// a data read must agree during concurrent membership changes.
+func WithReadTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return fmt.Errorf("begin read transaction: %w", err)
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback(context.Background())
+			panic(p)
+		}
+	}()
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback(context.Background())
+		return err
+	}
+	if err := tx.Rollback(context.Background()); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+		return fmt.Errorf("close read transaction: %w", err)
+	}
+	return nil
+}
+
 // Ping verifies database availability within the supplied context deadline.
 func Ping(ctx context.Context, pool *pgxpool.Pool) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)

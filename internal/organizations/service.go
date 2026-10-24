@@ -24,6 +24,8 @@ type Service struct {
 	repo   *Repository
 	now    func() time.Time
 	auditf func(ctx context.Context, q database.Querier, e audit.Event) error
+	// afterAuthorize is a test seam for deterministic authorization races.
+	afterAuthorize func()
 }
 
 func NewService(pool *pgxpool.Pool, repo *Repository) *Service {
@@ -85,6 +87,12 @@ func (s *Service) Update(ctx context.Context, actor identity.Identity, orgID uui
 	}
 	var out Organization
 	err = database.WithTx(ctx, s.pool, func(tx pgx.Tx) error {
+		// Same lock/order as membership mutation: an owner revocation that
+		// commits during this request cannot slip between authorization and
+		// the organization update.
+		if err := s.repo.LockOrganization(ctx, tx, orgID); err != nil {
+			return err
+		}
 		if _, err := s.authorize(ctx, tx, orgID, actor, authz.CanUpdateOrganization); err != nil {
 			return err
 		}
@@ -118,10 +126,18 @@ func (s *Service) ListMemberships(ctx context.Context, actor identity.Identity, 
 	if err != nil {
 		return nil, "", err
 	}
-	if _, err := s.authorize(ctx, s.pool, orgID, actor, authz.CanManageMemberships); err != nil {
-		return nil, "", err
-	}
-	items, err := s.repo.ListActiveMemberships(ctx, s.pool, orgID, limit, cur)
+	var items []Membership
+	err = database.WithReadTx(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := s.authorize(ctx, tx, orgID, actor, authz.CanManageMemberships); err != nil {
+			return err
+		}
+		if s.afterAuthorize != nil {
+			s.afterAuthorize()
+		}
+		var err error
+		items, err = s.repo.ListActiveMemberships(ctx, tx, orgID, limit, cur)
+		return err
+	})
 	if err != nil {
 		return nil, "", err
 	}
