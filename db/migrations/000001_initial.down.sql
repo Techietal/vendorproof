@@ -1,0 +1,13 @@
+DROP TABLE IF EXISTS audit_events;
+DROP TABLE IF EXISTS notification_deliveries;
+DROP TABLE IF EXISTS reviews;
+DROP TABLE IF EXISTS submissions;
+DROP TABLE IF EXISTS documents;
+DROP TABLE IF EXISTS obligations;
+DROP TABLE IF EXISTS requirement_assignments;
+DROP TABLE IF EXISTS requirement_versions;
+DROP TABLE IF EXISTS engagements;
+DROP TABLE IF EXISTS contractors;
+DROP TABLE IF EXISTS sites;
+DROP TABLE IF EXISTS memberships;
+DROP TABLE IF EXISTS organizations;
