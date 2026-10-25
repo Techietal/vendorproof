@@ -168,6 +168,13 @@ func (s *Service) Correct(ctx context.Context, actor identity.Identity, orgID, e
 		if err := ValidatePeriod(from, until); err != nil {
 			return err
 		}
+		// A correction can reopen or extend a historical period while its
+		// contractor or site is inactive. Deactivation only guarantees that
+		// *then-current* engagements were closed, so re-check parents whenever
+		// the proposed range still covers today or a later date.
+		if err := s.checkParentsActive(ctx, tx, orgID, current.ContractorID, current.SiteID, until); err != nil {
+			return err
+		}
 		if err := s.guard(ctx, tx, orgID, current, from, until); err != nil {
 			return err
 		}
@@ -253,6 +260,29 @@ func (s *Service) Close(ctx context.Context, actor identity.Identity, orgID, eng
 		return Engagement{}, err
 	}
 	return result, nil
+}
+
+// checkParentsActive rejects proposed ranges with current or future coverage
+// under an inactive parent. Ranges ending today or earlier are safely
+// historical and need no parent check.
+func (s *Service) checkParentsActive(ctx context.Context, q database.Querier, orgID, contractorID, siteID uuid.UUID, until *time.Time) error {
+	if until != nil && !until.After(validate.Today(s.now())) {
+		return nil
+	}
+	cFound, cActive, sFound, sActive, err := s.repo.Parents(ctx, q, orgID, contractorID, siteID)
+	if err != nil {
+		return err
+	}
+	if !cFound || !sFound {
+		return apperr.ErrNotFound
+	}
+	if !cActive {
+		return apperr.ErrInactiveContractor
+	}
+	if !sActive {
+		return apperr.ErrInactiveSite
+	}
+	return nil
 }
 
 func (s *Service) checkOverlap(ctx context.Context, q database.Querier, orgID, contractorID, siteID uuid.UUID, from time.Time, until *time.Time, excludeID uuid.UUID) error {
