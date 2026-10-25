@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export REQUIRE_DATABASE=1
 
-packages=(./internal/database ./internal/organizations ./internal/httpserver)
+packages=(./internal/database ./internal/organizations ./internal/sites ./internal/contractors ./internal/engagements ./internal/orgaccess ./internal/httpserver)
 log="$(mktemp)"
 trap 'rm -f "$log"' EXIT
 

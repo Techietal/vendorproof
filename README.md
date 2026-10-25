@@ -1,14 +1,15 @@
 # VendorProof — backend (development codename)
 
-**Status: Phase 1 backend foundation.** Authentication, tenant-scoped organizations,
-membership administration, audit events, migrations, and readiness reporting are
-implemented and tested. No business document workflow, frontend, or deployment
-automation exists yet. The name VendorProof requires rebranding before launch.
+**Status: Phase 2 backend module.** Phase 1 authentication, tenancy, memberships, audit,
+and migrations remain in place. Phase 2 adds sites, contractors, and durable dated
+engagements with database-enforced overlap protection, lifecycle guards, and reviewer
+read-only access. No document workflow, frontend, or deployment automation exists yet;
+the name VendorProof requires rebranding before launch.
 
-See [docs/03-phase-1-foundation.md](docs/03-phase-1-foundation.md) for the API,
-operating procedures, security guarantees, and known limitations. Domain background is
-in [docs/01-mvp-acceptance.md](docs/01-mvp-acceptance.md) and
-[docs/02-system-decisions.md](docs/02-system-decisions.md).
+See [docs/03-phase-1-foundation.md](docs/03-phase-1-foundation.md) for the foundation,
+[docs/04-phase-2-contractor-sites.md](docs/04-phase-2-contractor-sites.md) for the
+business module, and [docs/01-mvp-acceptance.md](docs/01-mvp-acceptance.md) /
+[docs/02-system-decisions.md](docs/02-system-decisions.md) for domain background.
 
 ## Architecture
 
@@ -21,7 +22,14 @@ A modular monolith in Go with explicit boundaries:
 | `cmd/migrate` | Versioned migration runner; never runs inside the API |
 | `cmd/devidp` | Development-only RS256 issuer and JWKS endpoint |
 | `internal/httpserver` | Router, middleware, thin HTTP handlers |
-| `internal/organizations` | Organizations, memberships, authorization, transactions, invariants |
+| `internal/organizations` | Organizations, memberships, transactions, invariants |
+| `internal/sites` | Site directory and lifecycle |
+| `internal/contractors` | Contractor directory and lifecycle |
+| `internal/engagements` | Dated assignments, overlap and correction guards |
+| `internal/orgaccess` | Shared tenant locking and membership authorization |
+| `internal/apperr` | Transport-neutral business error classes |
+| `internal/validate` | Name, email, and calendar-date validation |
+| `internal/pagination` | Shared keyset cursors |
 | `internal/auth` | JWT verification and cached JWKS with rotation |
 | `internal/authz` | Pure organization-role decisions |
 | `internal/audit` | Append-only audit inserts inside business transactions |
@@ -29,7 +37,7 @@ A modular monolith in Go with explicit boundaries:
 | `internal/config` | Environment validation with loopback-by-default binding |
 | `internal/httpx` | RFC 9457 problems and strict JSON decoding |
 | `internal/obligations` | Pre-existing pure monthly-obligation logic (unchanged) |
-| `db/migrations` | `000001` (unchanged) and forward-only Phase 1 changes |
+| `db/migrations` | `000001`–`000002` (unchanged) and forward-only Phase 2 `000003` |
 
 PostgreSQL is the only datastore. Business mutations and their audit event share one
 transaction. Tenant queries always carry `organization_id`; cross-tenant resources
@@ -89,6 +97,10 @@ complete catalog match against `000001` (tables, columns, types, nullability, de
 constraints, indexes, triggers, functions). Fresh or already-versioned databases are
 refused.
 
+`000003` installs `btree_gist` and an exclusion constraint, so the migrating role needs
+permission to create that extension. `000003.down` is allowed only while sites,
+contractors, engagements, assignment, and obligation tables are all empty.
+
 `000002.down` is allowed only on an **empty** database. `000002` added issuer-qualified
 identity, revocation state, and audit provenance; dropping those columns from populated
 rows is semantic loss even when no row is deleted. Any row in any business table
@@ -140,8 +152,17 @@ curl http://127.0.0.1:8080/health/live
 curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8080/v1/me
 ```
 
-Business endpoints, request examples, status-code semantics, and pagination are in
-[docs/03-phase-1-foundation.md](docs/03-phase-1-foundation.md).
+Health, identity, and organization endpoints are described in
+[docs/03-phase-1-foundation.md](docs/03-phase-1-foundation.md). Phase 2 site, contractor,
+and engagement endpoints, roles, filters, and examples are in
+[docs/04-phase-2-contractor-sites.md](docs/04-phase-2-contractor-sites.md):
+
+```sh
+ORG=$(curl -s -H "Authorization: Bearer $TOKEN" localhost:8080/v1/organizations \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["organizations"][0]["id"])')
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Factory A"}' "localhost:8080/v1/organizations/$ORG/sites"
+```
 
 ## Tests
 
@@ -175,7 +196,10 @@ REQUIRE_DATABASE=1 go test ./...
   stale keys expire after a fixed grace window.
 - Active membership is loaded from PostgreSQL on every protected request.
 - Non-members get `404`; members lacking a role get `403`.
-- Owner-only mutations; last-active-owner enforced under a row lock.
+- Owner-only membership mutations; last-active-owner enforced under a row lock.
+- Every Phase 2 write locks the organization row, re-authorizes, then mutates.
+- Engagement overlaps are rejected by an exclusion constraint as well as the service.
+- Reviewers are read-only for sites, contractors, and engagements.
 - Revocation takes effect on the next request despite a still-valid JWT.
 - Parameterized SQL with `organization_id` in every tenant query.
 - Problems never include stack traces; tokens are never logged.
@@ -196,8 +220,10 @@ REQUIRE_DATABASE=1 go test ./...
 - No rate limiting, TLS termination, metrics/tracing, or Row-Level Security.
 - JWKS cache is per-process.
 - Pagination is keyset-based, capped at 200.
-- Contractors, requirements, uploads, reviews, reminders, billing, and frontend are out
-  of scope.
+- Deactivation is immediate; no scheduled future deactivation.
+- Date-sensitive defaults use a server-side UTC date; no organization timezone yet.
+- Requirements, uploads, reviews, reminders, billing, and frontend are out of scope.
+  Phase 3 downstream tables already constrain engagement corrections.
 
 ## Domain notes (pre-existing)
 
