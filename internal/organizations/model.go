@@ -2,39 +2,38 @@ package organizations
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 
+	"vendorproof/internal/apperr"
 	"vendorproof/internal/authz"
 	"vendorproof/internal/identity"
+	"vendorproof/internal/pagination"
+	"vendorproof/internal/validate"
 )
 
 const (
-	MaxNameLen      = 200
-	DefaultPageSize = 50
-	MaxPageSize     = 200
+	MaxNameLen      = validate.MaxNameLen
+	DefaultPageSize = pagination.DefaultPageSize
+	MaxPageSize     = pagination.MaxPageSize
 	maxIssuerLen    = 2048
 	maxSubjectLen   = 255
-	maxCursorLen    = 512
 )
 
 var (
 	// ErrNotFound is returned when an organization or membership is invisible
 	// to the caller. Cross-tenant probes deliberately collapse into this error.
-	ErrNotFound = errors.New("resource not found")
+	ErrNotFound = apperr.ErrNotFound
 	// ErrForbidden means the caller is a member but lacks the required role.
-	ErrForbidden = errors.New("insufficient permissions")
+	ErrForbidden = apperr.ErrForbidden
 	// ErrConflict is a business or uniqueness conflict.
-	ErrConflict = errors.New("conflict")
+	ErrConflict = apperr.ErrConflict
 	// ErrLastOwner means the change would leave an organization ownerless.
 	ErrLastOwner = errors.New("organization must retain an active owner")
 	// ErrValidation carries field-level input errors.
-	ErrValidation = errors.New("validation failed")
+	ErrValidation = apperr.ErrValidation
 )
 
 // Organization is one tenant.
@@ -72,33 +71,13 @@ type MembershipWithOrganization struct {
 	OrganizationName string
 }
 
-// ValidationError describes invalid request fields.
-type ValidationError struct {
-	Fields map[string]string
-}
-
-func (e *ValidationError) Error() string        { return "validation failed" }
-func (e *ValidationError) Is(target error) bool { return target == ErrValidation }
-
-func validationErr(field, msg string) *ValidationError {
-	return &ValidationError{Fields: map[string]string{field: msg}}
-}
+// ValidationError describes invalid request fields. It is shared with every
+// Phase 2 module.
+type ValidationError = apperr.ValidationError
 
 // NormalizeName trims and validates an organization name.
 func NormalizeName(raw string) (string, error) {
-	name := strings.TrimSpace(raw)
-	if name == "" {
-		return "", validationErr("name", "must not be blank")
-	}
-	if utf8.RuneCountInString(name) > MaxNameLen {
-		return "", validationErr("name", fmt.Sprintf("must be at most %d characters", MaxNameLen))
-	}
-	for _, r := range name {
-		if unicode.IsControl(r) {
-			return "", validationErr("name", "must not contain control characters")
-		}
-	}
-	return name, nil
+	return validate.Name(raw)
 }
 
 // NormalizeIdentity validates an admin-supplied issuer/subject pair.
@@ -132,22 +111,16 @@ func hasHTTPScheme(raw string) bool {
 func ParseRole(raw string) (authz.Role, error) {
 	role, err := authz.ParseRole(raw)
 	if err != nil {
-		return "", validationErr("role", "must be owner, manager, or reviewer")
+		return "", apperr.Validation("role", "must be owner, manager, or reviewer")
 	}
 	return role, nil
 }
 
 // Page normalizes pagination inputs.
 func Page(limit int, cursor string) (int, string, error) {
-	if limit == 0 {
-		limit = DefaultPageSize
-	}
-	if limit < 1 || limit > MaxPageSize {
-		return 0, "", validationErr("limit", fmt.Sprintf("must be between 1 and %d", MaxPageSize))
-	}
-	cursor = strings.TrimSpace(cursor)
-	if len(cursor) > maxCursorLen {
-		return 0, "", validationErr("cursor", "is too long")
-	}
-	return limit, cursor, nil
+	return pagination.Page(limit, cursor)
+}
+
+func validationErr(field, msg string) *ValidationError {
+	return apperr.Validation(field, msg)
 }

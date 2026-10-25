@@ -22,8 +22,23 @@ const (
 	ActionMembershipRoleChanged    = "membership.role_changed"
 	ActionMembershipRevoked        = "membership.revoked"
 
+	ActionSiteCreated           = "site.created"
+	ActionSiteUpdated           = "site.updated"
+	ActionSiteDeactivated       = "site.deactivated"
+	ActionSiteReactivated       = "site.reactivated"
+	ActionContractorCreated     = "contractor.created"
+	ActionContractorUpdated     = "contractor.updated"
+	ActionContractorDeactivated = "contractor.deactivated"
+	ActionContractorReactivated = "contractor.reactivated"
+	ActionEngagementCreated     = "engagement.created"
+	ActionEngagementCorrected   = "engagement.corrected"
+	ActionEngagementClosed      = "engagement.closed"
+
 	ResourceOrganization = "organization"
 	ResourceMembership   = "membership"
+	ResourceSite         = "site"
+	ResourceContractor   = "contractor"
+	ResourceEngagement   = "engagement"
 )
 
 // Event is one audit row. Details must stay small and non-sensitive.

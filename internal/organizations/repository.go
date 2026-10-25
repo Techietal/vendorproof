@@ -12,6 +12,7 @@ import (
 	"vendorproof/internal/authz"
 	"vendorproof/internal/database"
 	"vendorproof/internal/identity"
+	"vendorproof/internal/orgaccess"
 )
 
 // Repository owns every SQL statement for organizations and memberships.
@@ -26,7 +27,7 @@ func NewRepository(pool *pgxpool.Pool) *Repository { return &Repository{pool: po
 func (r *Repository) Pool() *pgxpool.Pool { return r.pool }
 
 func (r *Repository) ListOrganizations(ctx context.Context, q database.Querier, ident identity.Identity, limit int, cur *cursor) ([]OrganizationWithRole, error) {
-	afterAt, afterID := cur.args()
+	afterAt, afterID := cur.Args()
 	rows, err := q.Query(ctx, `
 		SELECT m.id, m.created_at, o.id, o.name, o.created_at, o.updated_at, m.role
 		FROM memberships m
@@ -54,7 +55,7 @@ func (r *Repository) ListOrganizations(ctx context.Context, q database.Querier, 
 }
 
 func (r *Repository) ListMembershipsForIdentity(ctx context.Context, q database.Querier, ident identity.Identity, limit int, cur *cursor) ([]MembershipWithOrganization, error) {
-	afterAt, afterID := cur.args()
+	afterAt, afterID := cur.Args()
 	rows, err := q.Query(ctx, `
 		SELECT m.id, m.organization_id, m.identity_issuer, m.identity_subject, m.role,
 		       m.created_at, m.updated_at, o.name
@@ -146,7 +147,7 @@ func (r *Repository) GetMembershipIncludingRevoked(ctx context.Context, q databa
 }
 
 func (r *Repository) ListActiveMemberships(ctx context.Context, q database.Querier, orgID uuid.UUID, limit int, cur *cursor) ([]Membership, error) {
-	afterAt, afterID := cur.args()
+	afterAt, afterID := cur.Args()
 	rows, err := q.Query(ctx, `
 		SELECT id, organization_id, identity_issuer, identity_subject, role, created_at, updated_at, revoked_at
 		FROM memberships
@@ -173,18 +174,11 @@ func (r *Repository) ListActiveMemberships(ctx context.Context, q database.Queri
 	return out, rows.Err()
 }
 
-// LockOrganization serializes membership mutations for one organization for
-// the duration of the transaction, making last-owner checks race-free.
+// LockOrganization serializes mutations for one organization for the duration
+// of the transaction, making last-owner checks race-free. Phase 2 modules share
+// the same primitive and therefore the same lock order.
 func (r *Repository) LockOrganization(ctx context.Context, tx pgx.Tx, orgID uuid.UUID) error {
-	var id uuid.UUID
-	err := tx.QueryRow(ctx, `SELECT id FROM organizations WHERE id = $1 FOR UPDATE`, orgID).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return fmt.Errorf("lock organization: %w", err)
-	}
-	return nil
+	return orgaccess.LockOrganization(ctx, tx, orgID)
 }
 
 func (r *Repository) CountActiveOwners(ctx context.Context, q database.Querier, orgID uuid.UUID) (int, error) {

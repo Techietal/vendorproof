@@ -42,3 +42,18 @@ func CanUpdateOrganization(r Role) bool { return r == Owner }
 // CanManageMemberships is owner-only. Managers gain operational permissions in
 // later phases but cannot administer membership.
 func CanManageMemberships(r Role) bool { return r == Owner }
+
+// Phase 2 operational permissions. Reviewers keep read-only access to the
+// business directories; owners and managers may mutate them. Membership
+// administration remains owner-only (CanManageMemberships).
+func CanViewSites(r Role) bool { return r.Valid() }
+
+func CanManageSites(r Role) bool { return r == Owner || r == Manager }
+
+func CanViewContractors(r Role) bool { return r.Valid() }
+
+func CanManageContractors(r Role) bool { return r == Owner || r == Manager }
+
+func CanViewEngagements(r Role) bool { return r.Valid() }
+
+func CanManageEngagements(r Role) bool { return r == Owner || r == Manager }

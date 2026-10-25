@@ -5,7 +5,6 @@ package organizations
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,6 +15,7 @@ import (
 	"vendorproof/internal/authz"
 	"vendorproof/internal/database"
 	"vendorproof/internal/identity"
+	"vendorproof/internal/orgaccess"
 )
 
 // Service is the application boundary for organization administration.
@@ -348,18 +348,8 @@ func (s *Service) Bootstrap(ctx context.Context, name, issuer, subject string) (
 	return org, membership, nil
 }
 
-// authorize resolves the caller's active membership and applies a role check.
-// Missing membership is deliberately reported as not-found.
-func (s *Service) authorize(ctx context.Context, q database.Querier, orgID uuid.UUID, actor identity.Identity, allowed func(authz.Role) bool) (Membership, error) {
-	m, err := s.repo.GetActiveMembership(ctx, q, orgID, actor)
-	if errors.Is(err, ErrNotFound) {
-		return Membership{}, ErrNotFound
-	}
-	if err != nil {
-		return Membership{}, err
-	}
-	if !allowed(m.Role) {
-		return Membership{}, ErrForbidden
-	}
-	return m, nil
+// authorize resolves the caller's active membership through the shared
+// primitive. Missing membership is deliberately reported as not-found.
+func (s *Service) authorize(ctx context.Context, q database.Querier, orgID uuid.UUID, actor identity.Identity, allowed func(authz.Role) bool) (orgaccess.Access, error) {
+	return orgaccess.Authorize(ctx, q, orgID, actor, allowed)
 }
