@@ -114,3 +114,13 @@ func IsUniqueViolation(err error, constraint string) bool {
 	}
 	return pgErr.Code == "23505" && (constraint == "" || pgErr.ConstraintName == constraint)
 }
+
+// IsExclusionViolation reports whether err is a PostgreSQL exclusion
+// constraint failure, optionally for a specific constraint name.
+func IsExclusionViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	return pgErr.Code == "23P01" && (constraint == "" || pgErr.ConstraintName == constraint)
+}

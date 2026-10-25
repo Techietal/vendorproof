@@ -156,5 +156,5 @@ func TestBaselineIsIdempotentAndRefusesRepeats(t *testing.T) {
 	if err := m.Up(); err != nil {
 		t.Fatal(err)
 	}
-	assertVersion(t, m, 2)
+	assertVersion(t, m, 3)
 }
