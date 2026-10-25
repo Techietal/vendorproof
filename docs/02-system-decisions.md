@@ -16,7 +16,7 @@
 14. **Engagements are historical records:** the ID survives corrections and closes; there is no hard delete. Phase 3 records may reference it.
 15. **Overlap authority is the database:** a GiST exclusion constraint over half-open `daterange` plus tenant/contractor/site equality (`btree_gist`). The service also checks under the organization lock to return a clean 409.
 16. **Lifecycle is explicit and conservative:** `is_active` blocks new engagements; deactivation is refused while current/future engagements remain; reactivation does not reopen history; repeats are idempotent 200.
-17. **Corrections are narrow:** only engagement dates change; downstream obligations must stay inside the new interval; assignments without obligations allow extensions only.
+17. **Corrections are narrow:** only engagement dates change; downstream obligations must stay inside the new interval; assignments without obligations allow extensions only. A proposed interval covering today or later is refused while either parent is inactive, so PATCH cannot bypass deactivation.
 18. **Date defaults are UTC:** Phase 2 uses the server UTC calendar date (or explicit `asOf`) and does not invent an organization timezone.
 19. **One lock order:** every Phase 2 write takes the organization row lock, then re-authorizes the membership, then mutates; reads use one repeatable-read snapshot.
 

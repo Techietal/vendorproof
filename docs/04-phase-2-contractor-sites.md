@@ -132,9 +132,17 @@ Before writing, the service counts downstream references:
   interval, otherwise `409` (`historical references prevent this change`).
 - With **assignments but no obligations**, only extensions are allowed (start not later,
   and end not earlier / not newly bounded), because assignments have no date window.
-- With no references, any non-overlapping valid period is allowed.
+- With no references, any non-overlapping valid period is allowed, subject to the
+  parent-activity check below.
 
 Closing applies the same obligation-coverage guard.
+
+Correction also re-checks parent activity under the organization lock. If either the
+contractor or site is inactive and the proposed interval still covers today or a later
+date (`activeUntil` null or `> today(UTC)`), the correction is refused with `409` and no
+audit row. Purely historical corrections and shortenings ending today or earlier remain
+allowed. This closes the gap where a past, closed engagement could be reopened into the
+present after its parent had been deactivated. `Close` is unchanged: it only shortens.
 
 ## 8. Permission matrix
 

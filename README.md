@@ -199,6 +199,7 @@ REQUIRE_DATABASE=1 go test ./...
 - Owner-only membership mutations; last-active-owner enforced under a row lock.
 - Every Phase 2 write locks the organization row, re-authorizes, then mutates.
 - Engagement overlaps are rejected by an exclusion constraint as well as the service.
+- Engagement corrections cannot reopen current/future coverage under an inactive parent.
 - Reviewers are read-only for sites, contractors, and engagements.
 - Revocation takes effect on the next request despite a still-valid JWT.
 - Parameterized SQL with `organization_id` in every tenant query.
