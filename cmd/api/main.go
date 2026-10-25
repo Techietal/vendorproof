@@ -14,10 +14,13 @@ import (
 
 	"vendorproof/internal/auth"
 	"vendorproof/internal/config"
+	"vendorproof/internal/contractors"
 	"vendorproof/internal/database"
+	"vendorproof/internal/engagements"
 	"vendorproof/internal/httpserver"
 	"vendorproof/internal/logging"
 	"vendorproof/internal/organizations"
+	"vendorproof/internal/sites"
 )
 
 func main() {
@@ -48,12 +51,13 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	orgService := organizations.NewService(pool, organizations.NewRepository(pool))
-
 	handler := httpserver.New(httpserver.Deps{
 		Logger:        logger,
 		Verifier:      verifier,
-		Organizations: orgService,
+		Organizations: organizations.NewService(pool, organizations.NewRepository(pool)),
+		Sites:         sites.NewService(pool),
+		Contractors:   contractors.NewService(pool),
+		Engagements:   engagements.NewService(pool),
 		Readiness:     pool,
 		MaxBodyBytes:  cfg.MaxBodyBytes,
 		Timeout:       cfg.RequestTimeout,
