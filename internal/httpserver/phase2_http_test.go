@@ -431,3 +431,89 @@ func TestPhase2OversizedBodyAndRequestID(t *testing.T) {
 		t.Fatalf("problem = %v", body)
 	}
 }
+
+func TestPhase2CorrectionRejectedWhileParentInactive(t *testing.T) {
+	h := newHarness(t, 1<<20)
+	orgID, _, owner := h.seedOrg("Org")
+	token := h.token(owner)
+	contractorID := h.createContractor(orgID, token, "ABC", "")
+	siteID, _, _ := h.createSite(orgID, token, "Factory A")
+	status, body := h.createEngagement(orgID, token, contractorID, siteID, "2026-01-01", ptr("2026-06-01"))
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	engagementID := body["id"].(string)
+	path := fmt.Sprintf("/v1/organizations/%s/engagements/%s", orgID, engagementID)
+
+	if resp := h.postJSON(fmt.Sprintf("/v1/organizations/%s/contractors/%s/deactivate", orgID, contractorID), token, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("deactivate contractor = %d", resp.StatusCode)
+	}
+	if resp := h.request(http.MethodPatch, path, token, `{"activeUntil":null}`); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("reopen under inactive contractor = %d", resp.StatusCode)
+	}
+	unchanged := decode(t, h.request(http.MethodGet, path, token, nil))
+	if unchanged["activeUntil"] != "2026-06-01" {
+		t.Fatalf("history changed: %v", unchanged["activeUntil"])
+	}
+
+	if resp := h.postJSON(fmt.Sprintf("/v1/organizations/%s/contractors/%s/reactivate", orgID, contractorID), token, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("reactivate contractor = %d", resp.StatusCode)
+	}
+	if resp := h.postJSON(fmt.Sprintf("/v1/organizations/%s/sites/%s/deactivate", orgID, siteID), token, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("deactivate site = %d", resp.StatusCode)
+	}
+	if resp := h.request(http.MethodPatch, path, token, `{"activeUntil":null}`); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("reopen under inactive site = %d", resp.StatusCode)
+	}
+	if resp := h.postJSON(fmt.Sprintf("/v1/organizations/%s/sites/%s/reactivate", orgID, siteID), token, nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("reactivate site = %d", resp.StatusCode)
+	}
+	resp := h.request(http.MethodPatch, path, token, `{"activeUntil":null}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("reopen after reactivation = %d", resp.StatusCode)
+	}
+	if body := decode(t, resp); body["activeUntil"] != nil {
+		t.Fatalf("activeUntil = %v", body["activeUntil"])
+	}
+}
+
+func TestPhase2CorrectionAuditFailureRollsBack(t *testing.T) {
+	h := newHarness(t, 1<<20)
+	orgID, _, owner := h.seedOrg("Org")
+	token := h.token(owner)
+	contractorID := h.createContractor(orgID, token, "ABC", "")
+	siteID, _, _ := h.createSite(orgID, token, "Factory A")
+	status, body := h.createEngagement(orgID, token, contractorID, siteID, "2026-01-01", ptr("2026-06-01"))
+	if status != http.StatusCreated {
+		t.Fatal(status)
+	}
+	path := fmt.Sprintf("/v1/organizations/%s/engagements/%s", orgID, body["id"].(string))
+
+	if _, err := h.pool.Exec(t.Context(), `ALTER TABLE audit_events RENAME TO audit_events_off`); err != nil {
+		t.Fatal(err)
+	}
+	resp := h.request(http.MethodPatch, path, token, `{"activeUntil":null}`)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("audit failure = %d", resp.StatusCode)
+	}
+	_ = decode(t, resp)
+	if _, err := h.pool.Exec(t.Context(), `ALTER TABLE audit_events_off RENAME TO audit_events`); err != nil {
+		t.Fatal(err)
+	}
+	unchanged := decode(t, h.request(http.MethodGet, path, token, nil))
+	if unchanged["activeUntil"] != "2026-06-01" {
+		t.Fatalf("state changed after audit failure: %v", unchanged["activeUntil"])
+	}
+	if got := testutilCount(t, h, `SELECT count(*) FROM audit_events WHERE action='engagement.corrected'`); got != 0 {
+		t.Fatalf("audit rows = %d", got)
+	}
+}
+
+func testutilCount(t *testing.T, h *harness, query string) int {
+	t.Helper()
+	var n int
+	if err := h.pool.QueryRow(t.Context(), query).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}

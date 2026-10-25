@@ -44,13 +44,23 @@ func TestMutationsRollBackWhenAuditFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	pastUntil := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+	otherSite, otherContractor := uuid.New(), uuid.New()
+	testutil.MustExec(t, pool, `INSERT INTO sites (id, organization_id, name) VALUES ($1, $2, 'S2')`, otherSite, orgID)
+	testutil.MustExec(t, pool, `INSERT INTO contractors (id, organization_id, name) VALUES ($1, $2, 'C2')`, otherContractor, orgID)
+	closed, err := svc.Create(ctx, owner, orgID, Creation{
+		ContractorID: otherContractor, SiteID: otherSite, ActiveFrom: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), ActiveUntil: &pastUntil,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	svc.auditf = failAudit
 
 	second := from.AddDate(1, 0, 0)
 	if _, err := svc.Create(ctx, owner, orgID, Creation{ContractorID: contractorID, SiteID: siteID, ActiveFrom: second}); err == nil {
 		t.Fatal("create succeeded without audit")
 	}
-	if got := testutil.Count(t, pool, `SELECT count(*) FROM engagements`); got != 1 {
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM engagements`); got != 2 {
 		t.Fatalf("engagements = %d", got)
 	}
 	if _, err := svc.Close(ctx, owner, orgID, e.ID, "2026-06-01"); err == nil {
@@ -67,5 +77,17 @@ func TestMutationsRollBackWhenAuditFails(t *testing.T) {
 	}
 	if !stored.Equal(from) || until != nil {
 		t.Fatalf("state leaked: %s %v", stored, until)
+	}
+	// Reopening a closed historical engagement must also roll back with no
+	// audit event.
+	if _, err := svc.Correct(ctx, owner, orgID, closed.ID, Patch{ActiveUntil: optional.Value[string]{Set: true}}); err == nil {
+		t.Fatal("reopen succeeded without audit")
+	}
+	var closedUntil *time.Time
+	if err := pool.QueryRow(ctx, `SELECT active_until FROM engagements WHERE id=$1`, closed.ID).Scan(&closedUntil); err != nil {
+		t.Fatal(err)
+	}
+	if closedUntil == nil || !closedUntil.Equal(pastUntil) {
+		t.Fatalf("closed engagement mutated: %v", closedUntil)
 	}
 }

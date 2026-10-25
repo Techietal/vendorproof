@@ -12,6 +12,7 @@ import (
 
 	"vendorproof/internal/apperr"
 	"vendorproof/internal/authz"
+	"vendorproof/internal/contractors"
 	"vendorproof/internal/engagements"
 	"vendorproof/internal/identity"
 	"vendorproof/internal/optional"
@@ -56,6 +57,10 @@ func addContractor(t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID, active boo
 func newService(pool *pgxpool.Pool) *engagements.Service { return engagements.NewService(pool) }
 
 func newSiteService(pool *pgxpool.Pool) *sites.Service { return sites.NewService(pool) }
+
+func newContractorService(pool *pgxpool.Pool) *contractors.Service {
+	return contractors.NewService(pool)
+}
 
 func d(s string) time.Time {
 	t, err := time.Parse("2006-01-02", s)
@@ -530,6 +535,149 @@ func TestDatabaseExclusionConstraint(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO engagements (id, organization_id, contractor_id, site_id, active_from)
 		VALUES ($1, $2, $3, $4, '2026-05-01')`, uuid.New(), orgID, contractorID, siteID); err == nil {
 		t.Fatal("database allowed an overlap")
+	}
+}
+
+func pastEngagement(t *testing.T, svc *engagements.Service, pool *pgxpool.Pool, ctx context.Context, owner identity.Identity, orgID, contractorID, siteID uuid.UUID) engagements.Engagement {
+	t.Helper()
+	e, err := svc.Create(ctx, owner, orgID, creation(contractorID, siteID, "2026-01-01", str("2026-06-01")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return e
+}
+
+func TestCorrectionRejectedWhileParentInactive(t *testing.T) {
+	pool := testutil.NewDB(t)
+	svc := newService(pool)
+	siteSvc, contractorSvc := newSiteService(pool), newContractorService(pool)
+	ctx := context.Background()
+	orgID, owner := seedOrg(t, pool)
+
+	contractorID := addContractor(t, pool, orgID, true)
+	siteID := addSite(t, pool, orgID, true)
+	e := pastEngagement(t, svc, pool, ctx, owner, orgID, contractorID, siteID)
+
+	if _, err := contractorSvc.Deactivate(ctx, owner, orgID, contractorID); err != nil {
+		t.Fatalf("deactivate contractor: %v", err)
+	}
+	// Reopening an ended engagement would create future coverage.
+	if _, err := svc.Correct(ctx, owner, orgID, e.ID, engagements.Patch{ActiveUntil: optional.Value[string]{Set: true}}); !errors.Is(err, apperr.ErrInactiveContractor) {
+		t.Fatalf("reopen under inactive contractor = %v", err)
+	}
+	stored, err := svc.Get(ctx, owner, orgID, e.ID)
+	if err != nil || stored.ActiveUntil == nil || engagements.FormatDate(*stored.ActiveUntil) != "2026-06-01" {
+		t.Fatalf("history changed: %+v %v", stored, err)
+	}
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM audit_events WHERE action='engagement.corrected' AND resource_id=$1`, e.ID); got != 0 {
+		t.Fatalf("audit rows = %d", got)
+	}
+	// Extending the end into the future is also rejected.
+	future := "2030-01-01"
+	if _, err := svc.Correct(ctx, owner, orgID, e.ID, engagements.Patch{ActiveUntil: optional.Value[string]{Set: true, Value: &future}}); !errors.Is(err, apperr.ErrInactiveContractor) {
+		t.Fatalf("future extension = %v", err)
+	}
+	// A purely historical change remains safe.
+	earlier := "2026-03-01"
+	if _, err := svc.Correct(ctx, owner, orgID, e.ID, engagements.Patch{ActiveUntil: optional.Value[string]{Set: true, Value: &earlier}}); err != nil {
+		t.Fatalf("historical shortening = %v", err)
+	}
+	// Reactivation permits reopening.
+	if _, err := contractorSvc.Reactivate(ctx, owner, orgID, contractorID); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := svc.Correct(ctx, owner, orgID, e.ID, engagements.Patch{ActiveUntil: optional.Value[string]{Set: true}})
+	if err != nil || reopened.ActiveUntil != nil {
+		t.Fatalf("reopen after reactivation = %+v %v", reopened, err)
+	}
+
+	// The same guard applies to an inactive site.
+	c2 := addContractor(t, pool, orgID, true)
+	s2 := addSite(t, pool, orgID, true)
+	e2 := pastEngagement(t, svc, pool, ctx, owner, orgID, c2, s2)
+	if _, err := siteSvc.Deactivate(ctx, owner, orgID, s2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Correct(ctx, owner, orgID, e2.ID, engagements.Patch{ActiveUntil: optional.Value[string]{Set: true}}); !errors.Is(err, apperr.ErrInactiveSite) {
+		t.Fatalf("reopen under inactive site = %v", err)
+	}
+}
+
+// A correction holding the lock must be visible to a waiting deactivation.
+func TestConcurrentCorrectionThenDeactivation(t *testing.T) {
+	pool := testutil.NewDB(t)
+	svc := newService(pool)
+	siteSvc := newSiteService(pool)
+	ctx := context.Background()
+	orgID, owner := seedOrg(t, pool)
+	contractorID := addContractor(t, pool, orgID, true)
+	siteID := addSite(t, pool, orgID, true)
+	e := pastEngagement(t, svc, pool, ctx, owner, orgID, contractorID, siteID)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE engagements SET active_until=NULL WHERE id=$1`, e.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := siteSvc.Deactivate(ctx, owner, orgID, siteID)
+		done <- err
+	}()
+	testutil.WaitForLockWait(t, pool, "SELECT id FROM organizations")
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, apperr.ErrDeactivationBlocked) {
+		t.Fatalf("deactivation = %v", err)
+	}
+	var active bool
+	if err := pool.QueryRow(ctx, `SELECT is_active FROM sites WHERE id=$1`, siteID).Scan(&active); err != nil || !active {
+		t.Fatalf("site active=%t err=%v", active, err)
+	}
+}
+
+// A deactivation holding the lock must be visible to a waiting correction.
+func TestConcurrentDeactivationThenCorrection(t *testing.T) {
+	pool := testutil.NewDB(t)
+	svc := newService(pool)
+	ctx := context.Background()
+	orgID, owner := seedOrg(t, pool)
+	contractorID := addContractor(t, pool, orgID, true)
+	siteID := addSite(t, pool, orgID, true)
+	e := pastEngagement(t, svc, pool, ctx, owner, orgID, contractorID, siteID)
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	if _, err := tx.Exec(ctx, `SELECT id FROM organizations WHERE id=$1 FOR UPDATE`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE sites SET is_active=false WHERE id=$1`, siteID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.Correct(ctx, owner, orgID, e.ID, engagements.Patch{ActiveUntil: optional.Value[string]{Set: true}})
+		done <- err
+	}()
+	testutil.WaitForLockWait(t, pool, "SELECT id FROM organizations")
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, apperr.ErrInactiveSite) {
+		t.Fatalf("correction = %v", err)
+	}
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM audit_events WHERE action='engagement.corrected' AND resource_id=$1`, e.ID); got != 0 {
+		t.Fatalf("audit rows = %d", got)
 	}
 }
 
