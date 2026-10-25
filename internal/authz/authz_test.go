@@ -50,3 +50,26 @@ func TestManagerCannotDoOwnerOperations(t *testing.T) {
 		t.Error("reviewer can update organization")
 	}
 }
+
+func TestPhase2Permissions(t *testing.T) {
+	viewers := []func(Role) bool{CanViewSites, CanViewContractors, CanViewEngagements}
+	writers := []func(Role) bool{CanManageSites, CanManageContractors, CanManageEngagements}
+	for i := range viewers {
+		for _, role := range []Role{Owner, Manager, Reviewer} {
+			if !viewers[i](role) {
+				t.Errorf("view permission %d denied %s", i, role)
+			}
+		}
+		if viewers[i](Role("")) {
+			t.Errorf("view permission %d allowed invalid role", i)
+		}
+		for _, role := range []Role{Owner, Manager} {
+			if !writers[i](role) {
+				t.Errorf("write permission %d denied %s", i, role)
+			}
+		}
+		if writers[i](Reviewer) || writers[i](Role("")) {
+			t.Errorf("write permission %d allowed read-only role", i)
+		}
+	}
+}

@@ -13,10 +13,14 @@ import (
 
 	"github.com/google/uuid"
 
+	"vendorproof/internal/apperr"
 	"vendorproof/internal/authz"
+	"vendorproof/internal/contractors"
+	"vendorproof/internal/engagements"
 	"vendorproof/internal/httpx"
 	"vendorproof/internal/identity"
 	"vendorproof/internal/organizations"
+	"vendorproof/internal/sites"
 )
 
 // TokenVerifier validates bearer access tokens.
@@ -36,6 +40,35 @@ type OrganizationService interface {
 	RevokeMembership(ctx context.Context, actor identity.Identity, orgID, membershipID uuid.UUID) error
 }
 
+// SiteService is the HTTP-facing site application boundary.
+type SiteService interface {
+	Create(ctx context.Context, actor identity.Identity, orgID uuid.UUID, name string) (sites.Site, error)
+	Get(ctx context.Context, actor identity.Identity, orgID, siteID uuid.UUID) (sites.Site, error)
+	List(ctx context.Context, actor identity.Identity, orgID uuid.UUID, f sites.Filter, limit int, cursor string) ([]sites.Site, string, error)
+	Update(ctx context.Context, actor identity.Identity, orgID, siteID uuid.UUID, name *string) (sites.Site, error)
+	Deactivate(ctx context.Context, actor identity.Identity, orgID, siteID uuid.UUID) (sites.Site, error)
+	Reactivate(ctx context.Context, actor identity.Identity, orgID, siteID uuid.UUID) (sites.Site, error)
+}
+
+// ContractorService is the HTTP-facing contractor application boundary.
+type ContractorService interface {
+	Create(ctx context.Context, actor identity.Identity, orgID uuid.UUID, name, email string) (contractors.Contractor, error)
+	Get(ctx context.Context, actor identity.Identity, orgID, contractorID uuid.UUID) (contractors.Contractor, error)
+	List(ctx context.Context, actor identity.Identity, orgID uuid.UUID, f contractors.Filter, limit int, cursor string) ([]contractors.Contractor, string, error)
+	Update(ctx context.Context, actor identity.Identity, orgID, contractorID uuid.UUID, patch contractors.Patch) (contractors.Contractor, error)
+	Deactivate(ctx context.Context, actor identity.Identity, orgID, contractorID uuid.UUID) (contractors.Contractor, error)
+	Reactivate(ctx context.Context, actor identity.Identity, orgID, contractorID uuid.UUID) (contractors.Contractor, error)
+}
+
+// EngagementService is the HTTP-facing engagement application boundary.
+type EngagementService interface {
+	Create(ctx context.Context, actor identity.Identity, orgID uuid.UUID, in engagements.Creation) (engagements.Engagement, error)
+	Get(ctx context.Context, actor identity.Identity, orgID, engagementID uuid.UUID) (engagements.Engagement, error)
+	List(ctx context.Context, actor identity.Identity, orgID uuid.UUID, f engagements.Filter, limit int, cursor string) ([]engagements.Engagement, []engagements.State, time.Time, string, error)
+	Correct(ctx context.Context, actor identity.Identity, orgID, engagementID uuid.UUID, patch engagements.Patch) (engagements.Engagement, error)
+	Close(ctx context.Context, actor identity.Identity, orgID, engagementID uuid.UUID, until string) (engagements.Engagement, error)
+}
+
 // Readiness reports whether a required dependency is usable.
 type Readiness interface {
 	Ping(ctx context.Context) error
@@ -46,6 +79,9 @@ type Deps struct {
 	Logger        *slog.Logger
 	Verifier      TokenVerifier
 	Organizations OrganizationService
+	Sites         SiteService
+	Contractors   ContractorService
+	Engagements   EngagementService
 	Readiness     Readiness
 	MaxBodyBytes  int64
 	Timeout       time.Duration
@@ -54,6 +90,7 @@ type Deps struct {
 // Server holds handler dependencies.
 type Server struct {
 	deps Deps
+	now  func() time.Time
 }
 
 // New builds the complete handler stack.
@@ -67,7 +104,7 @@ func New(deps Deps) http.Handler {
 	if deps.Timeout <= 0 {
 		deps.Timeout = 15 * time.Second
 	}
-	s := &Server{deps: deps}
+	s := &Server{deps: deps, now: time.Now}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", s.live)
@@ -82,6 +119,26 @@ func New(deps Deps) http.Handler {
 	protected.HandleFunc("POST /v1/organizations/{organizationId}/memberships", s.addMembership)
 	protected.HandleFunc("PATCH /v1/organizations/{organizationId}/memberships/{membershipId}", s.changeMembershipRole)
 	protected.HandleFunc("DELETE /v1/organizations/{organizationId}/memberships/{membershipId}", s.revokeMembership)
+
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/sites", s.createSite)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/sites", s.listSites)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/sites/{siteId}", s.getSite)
+	protected.HandleFunc("PATCH /v1/organizations/{organizationId}/sites/{siteId}", s.updateSite)
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/sites/{siteId}/deactivate", s.deactivateSite)
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/sites/{siteId}/reactivate", s.reactivateSite)
+
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/contractors", s.createContractor)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/contractors", s.listContractors)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/contractors/{contractorId}", s.getContractor)
+	protected.HandleFunc("PATCH /v1/organizations/{organizationId}/contractors/{contractorId}", s.updateContractor)
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/contractors/{contractorId}/deactivate", s.deactivateContractor)
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/contractors/{contractorId}/reactivate", s.reactivateContractor)
+
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/engagements", s.createEngagement)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/engagements", s.listEngagements)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/engagements/{engagementId}", s.getEngagement)
+	protected.HandleFunc("PATCH /v1/organizations/{organizationId}/engagements/{engagementId}", s.correctEngagement)
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/engagements/{engagementId}/close", s.closeEngagement)
 	mux.Handle("/v1/", s.authenticate(protected))
 
 	var handler http.Handler = mux
@@ -355,19 +412,27 @@ func pageParams(w http.ResponseWriter, r *http.Request) (int, string, bool) {
 }
 
 func (s *Server) writeServiceError(w http.ResponseWriter, r *http.Request, err error, conflictDetail string) {
-	var invalid *organizations.ValidationError
+	var invalid *apperr.ValidationError
 	switch {
 	case errors.As(err, &invalid):
 		httpx.WriteProblemWithErrors(w, r, http.StatusBadRequest, "Validation failed.", invalid.Fields)
-	case errors.Is(err, organizations.ErrValidation):
+	case errors.Is(err, apperr.ErrValidation):
 		httpx.WriteProblem(w, r, http.StatusBadRequest, "Validation failed.")
-	case errors.Is(err, organizations.ErrNotFound):
+	case errors.Is(err, apperr.ErrNotFound):
 		httpx.WriteProblem(w, r, http.StatusNotFound, "Resource not found.")
-	case errors.Is(err, organizations.ErrForbidden):
+	case errors.Is(err, apperr.ErrForbidden):
 		httpx.WriteProblem(w, r, http.StatusForbidden, "Insufficient permissions for this operation.")
 	case errors.Is(err, organizations.ErrLastOwner):
 		httpx.WriteProblem(w, r, http.StatusConflict, organizations.ErrLastOwner.Error()+".")
-	case errors.Is(err, organizations.ErrConflict):
+	case errors.Is(err, apperr.ErrDeactivationBlocked):
+		httpx.WriteProblem(w, r, http.StatusConflict, "Active or future engagements still cover this record; close them first.")
+	case errors.Is(err, apperr.ErrInactiveContractor):
+		httpx.WriteProblem(w, r, http.StatusConflict, "The contractor is inactive.")
+	case errors.Is(err, apperr.ErrInactiveSite):
+		httpx.WriteProblem(w, r, http.StatusConflict, "The site is inactive.")
+	case errors.Is(err, apperr.ErrImmutable):
+		httpx.WriteProblem(w, r, http.StatusConflict, "Downstream history references this engagement; the requested dates would invalidate it.")
+	case errors.Is(err, apperr.ErrConflict):
 		httpx.WriteProblem(w, r, http.StatusConflict, conflictDetail)
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		httpx.WriteProblem(w, r, http.StatusServiceUnavailable, "The request could not complete in time.")

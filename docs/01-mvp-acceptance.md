@@ -2,6 +2,9 @@
 
 > Phase 1 status: authentication, organization tenancy, membership roles, audit events,
 > readiness, and migrations are implemented; see `docs/03-phase-1-foundation.md`.
+> Phase 2 status: sites, contractors, and dated engagements (with overlap protection,
+> lifecycle guards, reviewer read-only access, and audit) are implemented; see
+> `docs/04-phase-2-contractor-sites.md`. Steps 4–10 below remain Phase 3+ work.
 
 ## Personas
 
@@ -22,6 +25,17 @@
 8. Reviewer accepts a clean scanned submission; the obligation now shows accepted evidence.
 9. An unsubmitted obligation becomes overdue when its due date passes; a submitted file still awaiting internal review does not.
 10. Administrator exports a month/site report with due dates, status, submission/review timestamps, and auditable evidence references.
+
+## Phase 2 acceptance (implemented)
+
+- Owner/manager can create, read, update, deactivate, and reactivate sites and
+  contractors; reviewers can only read.
+- A contractor can be engaged at multiple sites; the same pair cannot hold overlapping
+  periods, while adjacent periods are accepted.
+- Closing keeps the historical engagement; a returning contractor gets a new record.
+- Deactivation is refused while current or future engagements remain.
+- Cross-tenant and indirect-reference probes return 404.
+- Every mutation writes an audit event in the same transaction.
 
 ## Security gates before using real customer documents
 

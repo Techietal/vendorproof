@@ -126,3 +126,22 @@ func Count(t testing.TB, pool *pgxpool.Pool, sql string, args ...any) int {
 	}
 	return n
 }
+
+// WaitForLockWait blocks until a backend other than this pool's current
+// connection is waiting on a lock for a query containing match.
+func WaitForLockWait(t testing.TB, pool *pgxpool.Pool, match string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		var waiting int
+		err := pool.QueryRow(context.Background(), `
+			SELECT count(*) FROM pg_stat_activity
+			WHERE wait_event_type = 'Lock' AND query LIKE $1
+			  AND pid <> pg_backend_pid()`, "%"+match+"%").Scan(&waiting)
+		if err == nil && waiting > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("no backend waited on a lock matching %q", match)
+}

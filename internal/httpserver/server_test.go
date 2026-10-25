@@ -19,10 +19,13 @@ import (
 	"vendorproof/internal/auth"
 	"vendorproof/internal/authz"
 	"vendorproof/internal/config"
+	"vendorproof/internal/contractors"
+	"vendorproof/internal/engagements"
 	"vendorproof/internal/httpserver"
 	"vendorproof/internal/identity"
 	"vendorproof/internal/logging"
 	"vendorproof/internal/organizations"
+	"vendorproof/internal/sites"
 	"vendorproof/internal/testutil"
 	"vendorproof/internal/testutil/testjwks"
 )
@@ -57,7 +60,10 @@ func newHarness(t *testing.T, maxBody int64) *harness {
 	svc := organizations.NewService(pool, organizations.NewRepository(pool))
 	handler := httpserver.New(httpserver.Deps{
 		Logger: logging.New(0, io.Discard), Verifier: verifier, Organizations: svc,
-		Readiness: pool, MaxBodyBytes: maxBody, Timeout: 10 * time.Second,
+		Sites:       sites.NewService(pool),
+		Contractors: contractors.NewService(pool),
+		Engagements: engagements.NewService(pool),
+		Readiness:   pool, MaxBodyBytes: maxBody, Timeout: 10 * time.Second,
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)

@@ -40,12 +40,24 @@ func assertVersion(t *testing.T, m *database.Migrator, want uint) {
 
 func mustRefuse(t *testing.T, m *database.Migrator, wantTable string) {
 	t.Helper()
-	err := m.Down()
-	if err == nil {
-		t.Fatal("downgrade succeeded on a populated database")
-	}
-	if !strings.Contains(err.Error(), "business data exists") || !strings.Contains(err.Error(), wantTable) {
-		t.Fatalf("unexpected refusal: %v", err)
+	for {
+		version, _, err := m.Version()
+		if err != nil {
+			t.Fatalf("read version: %v", err)
+		}
+		if version == 0 {
+			t.Fatal("downgrade completed on a populated database")
+		}
+		err = m.Down()
+		if err == nil {
+			continue
+		}
+		refusal := strings.Contains(err.Error(), "business data exists") ||
+			strings.Contains(err.Error(), "Phase 2 data exists")
+		if !refusal || !strings.Contains(err.Error(), wantTable) {
+			t.Fatalf("unexpected refusal: %v", err)
+		}
+		return
 	}
 }
 
@@ -74,6 +86,21 @@ func v2SchemaIntact(t *testing.T, pool *pgxpool.Pool) {
 	}
 }
 
+func v3SchemaIntact(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	v2SchemaIntact(t, pool)
+	if !columnExists(t, pool, "sites", "is_active") || !columnExists(t, pool, "sites", "updated_at") ||
+		!columnExists(t, pool, "contractors", "updated_at") || !columnExists(t, pool, "engagements", "updated_at") {
+		t.Fatal("v3 columns missing")
+	}
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM pg_constraint WHERE conname='engagements_no_overlap' AND contype='x'`); got != 1 {
+		t.Fatal("engagement overlap exclusion constraint missing")
+	}
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM pg_indexes WHERE indexname='engagements_org_pair_from'`); got != 1 {
+		t.Fatal("engagement pair index missing")
+	}
+}
+
 func insertOrganization(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
@@ -98,14 +125,24 @@ func insertAudit(t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID) {
 		uuid.New(), orgID)
 }
 
-// A1: a genuinely empty database can round-trip 000002 and then be removed
-// entirely.
+// A1: a genuinely empty database can round-trip every migration and then be
+// removed entirely.
 func TestEmptyDatabaseRollbackRoundTrip(t *testing.T) {
 	pool, m := migratedDB(t)
-	assertVersion(t, m, 2)
+	assertVersion(t, m, 3)
 
 	if err := m.Down(); err != nil {
-		t.Fatalf("empty down: %v", err)
+		t.Fatalf("empty v3 down: %v", err)
+	}
+	assertVersion(t, m, 2)
+	if columnExists(t, pool, "sites", "is_active") || columnExists(t, pool, "engagements", "updated_at") {
+		t.Fatal("v3 columns remain after empty down")
+	}
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM pg_constraint WHERE conname='engagements_no_overlap'`); got != 0 {
+		t.Fatal("overlap constraint remains after empty down")
+	}
+	if err := m.Down(); err != nil {
+		t.Fatalf("empty v2 down: %v", err)
 	}
 	assertVersion(t, m, 1)
 	if columnExists(t, pool, "memberships", "identity_issuer") || columnExists(t, pool, "audit_events", "actor_issuer") {
@@ -127,12 +164,11 @@ func TestEmptyDatabaseRollbackRoundTrip(t *testing.T) {
 	if err := m.Up(); err != nil {
 		t.Fatalf("re-up: %v", err)
 	}
-	assertVersion(t, m, 2)
-	if err := m.Down(); err != nil {
-		t.Fatal(err)
-	}
-	if err := m.Down(); err != nil {
-		t.Fatalf("v1 down: %v", err)
+	assertVersion(t, m, 3)
+	for i := 0; i < 3; i++ {
+		if err := m.Down(); err != nil {
+			t.Fatalf("down %d: %v", i+1, err)
+		}
 	}
 	if got := testutil.Count(t, pool, `SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename <> 'schema_migrations'`); got != 0 {
 		t.Fatalf("tables after full down = %d", got)
@@ -140,7 +176,7 @@ func TestEmptyDatabaseRollbackRoundTrip(t *testing.T) {
 	if err := m.Up(); err != nil {
 		t.Fatalf("final up: %v", err)
 	}
-	assertVersion(t, m, 2)
+	assertVersion(t, m, 3)
 	// The reapplied schema is usable.
 	insertOrganization(t, pool)
 }
@@ -275,8 +311,10 @@ func TestRollbackRefusedForReviewHistory(t *testing.T) {
 	pool, m := migratedDB(t)
 	g := insertReviewGraph(t, pool)
 
-	mustRefuse(t, m, "reviews")
-	v2SchemaIntact(t, pool)
+	// The graph contains Phase 2 rows, so 000003 refuses first and names them;
+	// reviews are still protected by the earlier guard.
+	mustRefuse(t, m, "sites")
+	v3SchemaIntact(t, pool)
 
 	var issuer, subject, decision, notes string
 	var reviewedAt time.Time
@@ -349,10 +387,11 @@ func TestRefusedRollbackIsAtomic(t *testing.T) {
 	revokedAt := time.Now().UTC().Truncate(time.Microsecond)
 	insertMembership(t, pool, orgID, "https://provider.example", "user-9", "owner", &revokedAt)
 	insertAudit(t, pool, orgID)
+	testutil.MustExec(t, pool, `INSERT INTO sites (id, organization_id, name) VALUES ($1, $2, 'S')`, uuid.New(), orgID)
 
 	schemaBefore := schemaSnapshot(t, pool)
 	dataBefore := dataSnapshot(t, pool)
-	mustRefuse(t, m, "business data exists")
+	mustRefuse(t, m, "sites")
 
 	if after := schemaSnapshot(t, pool); after != schemaBefore {
 		t.Fatal("schema changed after refused rollback")
@@ -361,7 +400,7 @@ func TestRefusedRollbackIsAtomic(t *testing.T) {
 		t.Fatal("business data changed after refused rollback")
 	}
 	version, dirty, err := m.Version()
-	if err != nil || !dirty || (version != 1 && version != 2) {
+	if err != nil || !dirty || (version != 1 && version != 2 && version != 3) {
 		t.Fatalf("ledger version=%d dirty=%t err=%v", version, dirty, err)
 	}
 }
@@ -371,25 +410,26 @@ func TestRecoveryFromRefusedRollback(t *testing.T) {
 	pool, m := migratedDB(t)
 	orgID := insertOrganization(t, pool)
 	insertMembership(t, pool, orgID, "https://provider.example", "user-1", "owner", nil)
+	testutil.MustExec(t, pool, `INSERT INTO sites (id, organization_id, name) VALUES ($1, $2, 'S')`, uuid.New(), orgID)
 
-	mustRefuse(t, m, "organizations")
+	mustRefuse(t, m, "sites")
 	version, dirty, err := m.Version()
-	if err != nil || !dirty || (version != 1 && version != 2) {
+	if err != nil || !dirty || (version != 1 && version != 2 && version != 3) {
 		t.Fatalf("ledger version=%d dirty=%t err=%v", version, dirty, err)
 	}
-	v2SchemaIntact(t, pool)
+	v3SchemaIntact(t, pool)
 
-	// Operator verifies the intact v2 schema, then repairs only bookkeeping.
-	if err := m.Force(2); err != nil {
+	// Operator verifies the intact latest schema, then repairs only bookkeeping.
+	if err := m.Force(3); err != nil {
 		t.Fatal(err)
 	}
-	assertVersion(t, m, 2)
-	v2SchemaIntact(t, pool)
+	assertVersion(t, m, 3)
+	v3SchemaIntact(t, pool)
 	if got := testutil.Count(t, pool, `SELECT count(*) FROM memberships`); got != 1 {
 		t.Fatalf("rows = %d", got)
 	}
 	// Still populated, so a clean second attempt must refuse again.
-	mustRefuse(t, m, "organizations")
+	mustRefuse(t, m, "sites")
 }
 
 // A9: every other populated business table is named in the refusal.
@@ -432,6 +472,107 @@ func TestRollbackRefusedForOtherBusinessTables(t *testing.T) {
 	}
 }
 
+// Phase 2 migration: a populated v2 database upgrades additively.
+func TestMigrationPreservesVersionTwoData(t *testing.T) {
+	url, pool := testutil.NewRawDB(t)
+	for _, name := range []string{"000001_initial.up.sql", "000002_phase1_identity_and_invariants.up.sql"} {
+		raw, err := migrations.FS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testutil.MustExec(t, pool, string(raw))
+	}
+	orgID := insertOrganization(t, pool)
+	siteID, contractorID, engagementID := uuid.New(), uuid.New(), uuid.New()
+	testutil.MustExec(t, pool, `INSERT INTO sites (id, organization_id, name) VALUES ($1, $2, 'Factory A')`, siteID, orgID)
+	testutil.MustExec(t, pool, `INSERT INTO contractors (id, organization_id, name) VALUES ($1, $2, 'ABC Security')`, contractorID, orgID)
+	testutil.MustExec(t, pool, `INSERT INTO engagements (id, organization_id, contractor_id, site_id, active_from)
+		VALUES ($1, $2, $3, $4, '2026-01-01')`, engagementID, orgID, contractorID, siteID)
+
+	m, err := database.NewMigrator(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	if err := m.Force(2); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Up(); err != nil {
+		t.Fatalf("upgrade populated v2: %v", err)
+	}
+	assertVersion(t, m, 3)
+	v3SchemaIntact(t, pool)
+
+	var name string
+	var active bool
+	if err := pool.QueryRow(context.Background(), `SELECT name, is_active FROM sites WHERE id=$1`, siteID).Scan(&name, &active); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Factory A" || !active {
+		t.Fatalf("site changed: %q active=%t", name, active)
+	}
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM engagements WHERE id=$1`, engagementID); got != 1 {
+		t.Fatal("engagement lost")
+	}
+}
+
+// Pre-existing overlaps fail the upgrade with a usable diagnostic instead of a
+// bare extension or constraint error.
+func TestMigrationRefusesPreExistingOverlap(t *testing.T) {
+	url, pool := testutil.NewRawDB(t)
+	for _, name := range []string{"000001_initial.up.sql", "000002_phase1_identity_and_invariants.up.sql"} {
+		raw, err := migrations.FS.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		testutil.MustExec(t, pool, string(raw))
+	}
+	orgID := insertOrganization(t, pool)
+	siteID, contractorID := uuid.New(), uuid.New()
+	testutil.MustExec(t, pool, `INSERT INTO sites (id, organization_id, name) VALUES ($1, $2, 'S')`, siteID, orgID)
+	testutil.MustExec(t, pool, `INSERT INTO contractors (id, organization_id, name) VALUES ($1, $2, 'C')`, contractorID, orgID)
+	testutil.MustExec(t, pool, `INSERT INTO engagements (id, organization_id, contractor_id, site_id, active_from, active_until)
+		VALUES ($1, $2, $3, $4, '2026-01-01', '2026-06-01')`, uuid.New(), orgID, contractorID, siteID)
+	testutil.MustExec(t, pool, `INSERT INTO engagements (id, organization_id, contractor_id, site_id, active_from, active_until)
+		VALUES ($1, $2, $3, $4, '2026-05-01', '2026-08-01')`, uuid.New(), orgID, contractorID, siteID)
+
+	m, err := database.NewMigrator(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = m.Close() })
+	if err := m.Force(2); err != nil {
+		t.Fatal(err)
+	}
+	err = m.Up()
+	if err == nil || !strings.Contains(err.Error(), "overlapping engagement") {
+		t.Fatalf("err = %v", err)
+	}
+	v2SchemaIntact(t, pool)
+	if columnExists(t, pool, "sites", "is_active") {
+		t.Fatal("partial v3 columns remain")
+	}
+	version, dirty, verr := m.Version()
+	if verr != nil || !dirty || version != 3 {
+		t.Fatalf("ledger version=%d dirty=%t err=%v", version, dirty, verr)
+	}
+}
+
+// Deactivation state would be lost by 000003.down, so it refuses.
+func TestRollbackRefusedForInactiveSite(t *testing.T) {
+	pool, m := migratedDB(t)
+	orgID := insertOrganization(t, pool)
+	siteID := uuid.New()
+	testutil.MustExec(t, pool, `INSERT INTO sites (id, organization_id, name, is_active) VALUES ($1, $2, 'S', false)`, siteID, orgID)
+
+	mustRefuse(t, m, "sites")
+	v3SchemaIntact(t, pool)
+	var active bool
+	if err := pool.QueryRow(context.Background(), `SELECT is_active FROM sites WHERE id=$1`, siteID).Scan(&active); err != nil || active {
+		t.Fatalf("active=%t err=%v", active, err)
+	}
+}
+
 // Baseline tests live below; rollback tests above.
 
 func TestBaselineOfManuallyAppliedInitialSchema(t *testing.T) {
@@ -454,7 +595,7 @@ func TestBaselineOfManuallyAppliedInitialSchema(t *testing.T) {
 	if err := m.Up(); err != nil {
 		t.Fatal(err)
 	}
-	assertVersion(t, m, 2)
+	assertVersion(t, m, 3)
 	if got := testutil.Count(t, pool, `SELECT count(*) FROM information_schema.columns WHERE table_name='audit_events' AND column_name='actor_issuer'`); got != 1 {
 		t.Fatalf("forward migration did not apply")
 	}
@@ -500,6 +641,6 @@ func TestBaselineGuards(t *testing.T) {
 		if err := database.Baseline(context.Background(), pool, m, true); !errors.Is(err, database.ErrAlreadyInitialized) {
 			t.Fatalf("err = %v", err)
 		}
-		assertVersion(t, m, 2)
+		assertVersion(t, m, 3)
 	})
 }
