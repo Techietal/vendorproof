@@ -79,6 +79,18 @@ func Date(field, raw string) (time.Time, error) {
 	return date, nil
 }
 
+// LoadLocation validates an IANA timezone identifier.
+func LoadLocation(raw string) (*time.Location, error) {
+	if raw == "" {
+		return nil, apperr.Validation("timezone", "must not be blank")
+	}
+	loc, err := time.LoadLocation(raw)
+	if err != nil {
+		return nil, apperr.Validation("timezone", "must be a valid IANA timezone")
+	}
+	return loc, nil
+}
+
 // Today returns the documented server-side UTC calendar date.
 func Today(now time.Time) time.Time {
 	y, m, d := now.UTC().Date()

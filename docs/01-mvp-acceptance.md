@@ -4,7 +4,11 @@
 > readiness, and migrations are implemented; see `docs/03-phase-1-foundation.md`.
 > Phase 2 status: sites, contractors, and dated engagements (with overlap protection,
 > lifecycle guards, reviewer read-only access, and audit) are implemented; see
-> `docs/04-phase-2-contractor-sites.md`. Steps 4–10 below remain Phase 3+ work.
+> `docs/04-phase-2-contractor-sites.md`.
+> Phase 3 status: versioned requirements, dated requirement assignments, and the
+> monthly obligation generation engine are implemented; see
+> `docs/05-phase-3-requirements-obligations.md`. Steps 6–10 below remain Phase 4 work
+> (submissions, reviews, overdue tracking, and reporting).
 
 ## Personas
 
@@ -26,7 +30,16 @@
 9. An unsubmitted obligation becomes overdue when its due date passes; a submitted file still awaiting internal review does not.
 10. Administrator exports a month/site report with due dates, status, submission/review timestamps, and auditable evidence references.
 
-## Phase 2 acceptance (implemented)
+## Phase 3 acceptance (implemented)
+
+- Owner/manager can create a versioned requirement family with cadence, due day, and IANA timezone.
+- New versions are immutable and numbered sequentially within a family.
+- Manager can assign a requirement version to an engagement with an effective date range; overlapping assignments for the same family and engagement are rejected.
+- Scheduler generates one obligation per engagement and month, with idempotency (re-running does not create duplicates).
+- Obligations carry period, coverage window (partial-month intersection), due date (computed in the requirement's timezone), and lifecycle state.
+- Reviewer can view obligations and assignments; cannot create or generate.
+- The `phase3 generate-obligations` CLI runs generation with dry-run support.
+- Migration 000004 adds Phase 3 tables and refuses downgrade when Phase 3 data exists.
 
 - Owner/manager can create, read, update, deactivate, and reactivate sites and
   contractors; reviewers can only read.

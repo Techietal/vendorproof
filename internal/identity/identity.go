@@ -45,3 +45,8 @@ func ValidateSubject(subject string) bool {
 	}
 	return true
 }
+
+// System returns the identity used for CLI/system-initiated actions.
+func System() Identity {
+	return Identity{Issuer: "system", Subject: "cli"}
+}

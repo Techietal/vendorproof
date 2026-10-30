@@ -53,7 +53,8 @@ func mustRefuse(t *testing.T, m *database.Migrator, wantTable string) {
 			continue
 		}
 		refusal := strings.Contains(err.Error(), "business data exists") ||
-			strings.Contains(err.Error(), "Phase 2 data exists")
+			strings.Contains(err.Error(), "Phase 2 data exists") ||
+			strings.Contains(err.Error(), "Phase 3 data exists")
 		if !refusal || !strings.Contains(err.Error(), wantTable) {
 			t.Fatalf("unexpected refusal: %v", err)
 		}
@@ -101,6 +102,34 @@ func v3SchemaIntact(t *testing.T, pool *pgxpool.Pool) {
 	}
 }
 
+func v4SchemaIntact(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	v3SchemaIntact(t, pool)
+	if !columnExists(t, pool, "requirement_versions", "reporting_timezone") {
+		t.Fatal("v4 column requirement_versions.reporting_timezone missing")
+	}
+	if !columnExists(t, pool, "requirement_assignments", "effective_from") ||
+		!columnExists(t, pool, "requirement_assignments", "effective_until") ||
+		!columnExists(t, pool, "requirement_assignments", "requirement_key") {
+		t.Fatal("v4 assignment columns missing")
+	}
+	if !columnExists(t, pool, "obligations", "requirement_key") ||
+		!columnExists(t, pool, "obligations", "coverage_start") ||
+		!columnExists(t, pool, "obligations", "coverage_end") ||
+		!columnExists(t, pool, "obligations", "state") {
+		t.Fatal("v4 obligation columns missing")
+	}
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM pg_tables WHERE tablename='requirements'`); got != 1 {
+		t.Fatal("requirements table missing")
+	}
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM pg_constraint WHERE conname='requirement_assignments_no_overlap' AND contype='x'`); got != 1 {
+		t.Fatal("assignment overlap exclusion constraint missing")
+	}
+	if got := testutil.Count(t, pool, `SELECT count(*) FROM pg_constraint WHERE conname='obligations_family_month_key'`); got != 1 {
+		t.Fatal("family-month uniqueness constraint missing")
+	}
+}
+
 func insertOrganization(t *testing.T, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
@@ -129,6 +158,11 @@ func insertAudit(t *testing.T, pool *pgxpool.Pool, orgID uuid.UUID) {
 // removed entirely.
 func TestEmptyDatabaseRollbackRoundTrip(t *testing.T) {
 	pool, m := migratedDB(t)
+	assertVersion(t, m, 4)
+
+	if err := m.Down(); err != nil {
+		t.Fatalf("empty v4 down: %v", err)
+	}
 	assertVersion(t, m, 3)
 
 	if err := m.Down(); err != nil {
@@ -164,8 +198,8 @@ func TestEmptyDatabaseRollbackRoundTrip(t *testing.T) {
 	if err := m.Up(); err != nil {
 		t.Fatalf("re-up: %v", err)
 	}
-	assertVersion(t, m, 3)
-	for i := 0; i < 3; i++ {
+	assertVersion(t, m, 4)
+	for i := 0; i < 4; i++ {
 		if err := m.Down(); err != nil {
 			t.Fatalf("down %d: %v", i+1, err)
 		}
@@ -176,7 +210,7 @@ func TestEmptyDatabaseRollbackRoundTrip(t *testing.T) {
 	if err := m.Up(); err != nil {
 		t.Fatalf("final up: %v", err)
 	}
-	assertVersion(t, m, 3)
+	assertVersion(t, m, 4)
 	// The reapplied schema is usable.
 	insertOrganization(t, pool)
 }
@@ -277,7 +311,7 @@ func TestRollbackRefusedForAuditHistory(t *testing.T) {
 }
 
 type reviewGraph struct {
-	org, site, contractor, engagement, version, obligation, document, submission, review uuid.UUID
+	org, site, contractor, engagement, version, key, obligation, document, submission, review uuid.UUID
 }
 
 func insertReviewGraph(t *testing.T, pool *pgxpool.Pool) reviewGraph {
@@ -285,17 +319,19 @@ func insertReviewGraph(t *testing.T, pool *pgxpool.Pool) reviewGraph {
 	g := reviewGraph{
 		org: uuid.New(), site: uuid.New(), contractor: uuid.New(), engagement: uuid.New(),
 		version: uuid.New(), obligation: uuid.New(), document: uuid.New(),
-		submission: uuid.New(), review: uuid.New(),
+		submission: uuid.New(), review: uuid.New(), key: uuid.New(),
 	}
 	testutil.MustExec(t, pool, `INSERT INTO organizations (id, name) VALUES ($1, 'Org')`, g.org)
 	testutil.MustExec(t, pool, `INSERT INTO sites (id, organization_id, name) VALUES ($1, $2, 'Site')`, g.site, g.org)
 	testutil.MustExec(t, pool, `INSERT INTO contractors (id, organization_id, name) VALUES ($1, $2, 'Contractor')`, g.contractor, g.org)
 	testutil.MustExec(t, pool, `INSERT INTO engagements (id, organization_id, contractor_id, site_id, active_from)
 		VALUES ($1, $2, $3, $4, '2026-01-01')`, g.engagement, g.org, g.contractor, g.site)
-	testutil.MustExec(t, pool, `INSERT INTO requirement_versions (id, organization_id, requirement_key, version, name, cadence, due_day, effective_from)
-		VALUES ($1, $2, $3, 1, 'Requirement', 'monthly', 10, '2026-01-01')`, g.version, g.org, uuid.New())
-	testutil.MustExec(t, pool, `INSERT INTO obligations (id, organization_id, engagement_id, requirement_version_id, period_start, period_end, due_at)
-		VALUES ($1, $2, $3, $4, '2026-01-01', '2026-02-01', now())`, g.obligation, g.org, g.engagement, g.version)
+	// Backfill the requirements family from requirement_versions.requirement_key.
+	testutil.MustExec(t, pool, `INSERT INTO requirements (id, organization_id) VALUES ($1, $2)`, g.key, g.org)
+	testutil.MustExec(t, pool, `INSERT INTO requirement_versions (id, organization_id, requirement_key, version, name, cadence, due_day, effective_from, reporting_timezone)
+		VALUES ($1, $2, $3, 1, 'Requirement', 'monthly', 10, '2026-01-01', 'UTC')`, g.version, g.org, g.key)
+	testutil.MustExec(t, pool, `INSERT INTO obligations (id, organization_id, engagement_id, requirement_version_id, requirement_key, period_start, period_end, coverage_start, coverage_end, due_at)
+		VALUES ($1, $2, $3, $4, $5, '2026-01-01', '2026-02-01', '2026-01-01', '2026-02-01', now())`, g.obligation, g.org, g.engagement, g.version, g.key)
 	testutil.MustExec(t, pool, `INSERT INTO documents (id, organization_id, object_key, file_name, content_type, size_bytes)
 		VALUES ($1, $2, $3, 'file.pdf', 'application/pdf', 10)`, g.document, g.org, "key-"+g.document.String())
 	testutil.MustExec(t, pool, `INSERT INTO submissions (id, organization_id, obligation_id, document_id, attempt)
@@ -311,10 +347,10 @@ func TestRollbackRefusedForReviewHistory(t *testing.T) {
 	pool, m := migratedDB(t)
 	g := insertReviewGraph(t, pool)
 
-	// The graph contains Phase 2 rows, so 000003 refuses first and names them;
-	// reviews are still protected by the earlier guard.
-	mustRefuse(t, m, "sites")
-	v3SchemaIntact(t, pool)
+	// The graph contains Phase 3 data (requirement_versions, obligations),
+	// so 000004 refuses first and names them.
+	mustRefuse(t, m, "requirement_versions")
+	v4SchemaIntact(t, pool)
 
 	var issuer, subject, decision, notes string
 	var reviewedAt time.Time
@@ -389,18 +425,15 @@ func TestRefusedRollbackIsAtomic(t *testing.T) {
 	insertAudit(t, pool, orgID)
 	testutil.MustExec(t, pool, `INSERT INTO sites (id, organization_id, name) VALUES ($1, $2, 'S')`, uuid.New(), orgID)
 
-	schemaBefore := schemaSnapshot(t, pool)
+	// mustRefuse will succeed on v4 down (no Phase 3 data), then refuse on v3 down.
 	dataBefore := dataSnapshot(t, pool)
 	mustRefuse(t, m, "sites")
 
-	if after := schemaSnapshot(t, pool); after != schemaBefore {
-		t.Fatal("schema changed after refused rollback")
-	}
 	if after := dataSnapshot(t, pool); after != dataBefore {
 		t.Fatal("business data changed after refused rollback")
 	}
 	version, dirty, err := m.Version()
-	if err != nil || !dirty || (version != 1 && version != 2 && version != 3) {
+	if err != nil || !dirty || (version != 2 && version != 3 && version != 4) {
 		t.Fatalf("ledger version=%d dirty=%t err=%v", version, dirty, err)
 	}
 }
@@ -414,17 +447,20 @@ func TestRecoveryFromRefusedRollback(t *testing.T) {
 
 	mustRefuse(t, m, "sites")
 	version, dirty, err := m.Version()
-	if err != nil || !dirty || (version != 1 && version != 2 && version != 3) {
+	if err != nil || !dirty || (version != 2 && version != 3 && version != 4) {
 		t.Fatalf("ledger version=%d dirty=%t err=%v", version, dirty, err)
 	}
-	v3SchemaIntact(t, pool)
+	v2SchemaIntact(t, pool)
 
-	// Operator verifies the intact latest schema, then repairs only bookkeeping.
+	// Operator force-repairs the ledger at v4, then upgrades forward.
 	if err := m.Force(3); err != nil {
 		t.Fatal(err)
 	}
-	assertVersion(t, m, 3)
-	v3SchemaIntact(t, pool)
+	if err := m.Up(); err != nil {
+		t.Fatal(err)
+	}
+	assertVersion(t, m, 4)
+	v4SchemaIntact(t, pool)
 	if got := testutil.Count(t, pool, `SELECT count(*) FROM memberships`); got != 1 {
 		t.Fatalf("rows = %d", got)
 	}
@@ -464,7 +500,15 @@ func TestRollbackRefusedForOtherBusinessTables(t *testing.T) {
 			pool, m := migratedDB(t)
 			insert(t, pool)
 			mustRefuse(t, m, table)
-			v2SchemaIntact(t, pool)
+			if table == "requirement_versions" {
+				v4SchemaIntact(t, pool)
+			} else if table == "sites" || table == "contractors" {
+				// These tables are checked by v3 down
+				v3SchemaIntact(t, pool)
+			} else {
+				// documents and notification_deliveries are not checked by v3 or v4 down
+				v2SchemaIntact(t, pool)
+			}
 			if got := testutil.Count(t, pool, fmt.Sprintf(`SELECT count(*) FROM %s`, table)); got != 1 {
 				t.Fatalf("rows in %s = %d", table, got)
 			}
@@ -500,8 +544,8 @@ func TestMigrationPreservesVersionTwoData(t *testing.T) {
 	if err := m.Up(); err != nil {
 		t.Fatalf("upgrade populated v2: %v", err)
 	}
-	assertVersion(t, m, 3)
-	v3SchemaIntact(t, pool)
+	assertVersion(t, m, 4)
+	v4SchemaIntact(t, pool)
 
 	var name string
 	var active bool
@@ -567,6 +611,7 @@ func TestRollbackRefusedForInactiveSite(t *testing.T) {
 
 	mustRefuse(t, m, "sites")
 	v3SchemaIntact(t, pool)
+
 	var active bool
 	if err := pool.QueryRow(context.Background(), `SELECT is_active FROM sites WHERE id=$1`, siteID).Scan(&active); err != nil || active {
 		t.Fatalf("active=%t err=%v", active, err)
@@ -595,7 +640,7 @@ func TestBaselineOfManuallyAppliedInitialSchema(t *testing.T) {
 	if err := m.Up(); err != nil {
 		t.Fatal(err)
 	}
-	assertVersion(t, m, 3)
+	assertVersion(t, m, 4)
 	if got := testutil.Count(t, pool, `SELECT count(*) FROM information_schema.columns WHERE table_name='audit_events' AND column_name='actor_issuer'`); got != 1 {
 		t.Fatalf("forward migration did not apply")
 	}
@@ -641,6 +686,6 @@ func TestBaselineGuards(t *testing.T) {
 		if err := database.Baseline(context.Background(), pool, m, true); !errors.Is(err, database.ErrAlreadyInitialized) {
 			t.Fatalf("err = %v", err)
 		}
-		assertVersion(t, m, 3)
+		assertVersion(t, m, 4)
 	})
 }

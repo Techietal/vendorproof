@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"vendorproof/internal/assignments"
 	"vendorproof/internal/auth"
 	"vendorproof/internal/authz"
 	"vendorproof/internal/config"
@@ -24,7 +25,9 @@ import (
 	"vendorproof/internal/httpserver"
 	"vendorproof/internal/identity"
 	"vendorproof/internal/logging"
+	"vendorproof/internal/obligations"
 	"vendorproof/internal/organizations"
+	"vendorproof/internal/requirements"
 	"vendorproof/internal/sites"
 	"vendorproof/internal/testutil"
 	"vendorproof/internal/testutil/testjwks"
@@ -60,10 +63,13 @@ func newHarness(t *testing.T, maxBody int64) *harness {
 	svc := organizations.NewService(pool, organizations.NewRepository(pool))
 	handler := httpserver.New(httpserver.Deps{
 		Logger: logging.New(0, io.Discard), Verifier: verifier, Organizations: svc,
-		Sites:       sites.NewService(pool),
-		Contractors: contractors.NewService(pool),
-		Engagements: engagements.NewService(pool),
-		Readiness:   pool, MaxBodyBytes: maxBody, Timeout: 10 * time.Second,
+		Sites:        sites.NewService(pool),
+		Contractors:  contractors.NewService(pool),
+		Engagements:  engagements.NewService(pool),
+		Requirements: requirements.NewService(pool),
+		Assignments:  assignments.NewService(pool),
+		Obligations:  obligations.NewService(pool),
+		Readiness:    pool, MaxBodyBytes: maxBody, Timeout: 10 * time.Second,
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)

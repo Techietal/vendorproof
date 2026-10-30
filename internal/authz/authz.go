@@ -57,3 +57,19 @@ func CanManageContractors(r Role) bool { return r == Owner || r == Manager }
 func CanViewEngagements(r Role) bool { return r.Valid() }
 
 func CanManageEngagements(r Role) bool { return r == Owner || r == Manager }
+
+// Phase 3 operational permissions. Reviewers keep read-only access to
+// requirements, assignments, and obligations. Owners and managers may
+// create requirements, publish versions, and manage assignments. Generation
+// is restricted to owners and managers.
+func CanViewRequirements(r Role) bool { return r.Valid() }
+
+func CanManageRequirements(r Role) bool { return r == Owner || r == Manager }
+
+func CanViewAssignments(r Role) bool { return r.Valid() }
+
+func CanManageAssignments(r Role) bool { return r == Owner || r == Manager }
+
+func CanViewObligations(r Role) bool { return r.Valid() }
+
+func CanGenerateObligations(r Role) bool { return r == Owner || r == Manager }

@@ -289,8 +289,8 @@ REQUIRE_DATABASE=1 go test -race ./...
 ```
 
 `verify-integration.sh` now requires the `sites`, `contractors`, `engagements`,
-`orgaccess`, `database`, `organizations`, and `httpserver` packages and fails on any
-skip.
+`orgaccess`, `database`, `organizations`, `requirements`, `assignments`,
+`obligations`, and `httpserver` packages and fails on any skip.
 
 ## 17. Known limitations
 
@@ -307,3 +307,23 @@ skip.
 Phase 3 can attach templates and generators without changing an engagement's identity.
 When assignment/obligation semantics exist, the conservative assignment-extension guard
 can be relaxed with a dedicated, audited policy.
+
+### Integration points
+
+- **Engagement active range**: Phase 3 obligation generation reads `engagements.active_from`
+  and `engagements.active_until` to compute the coverage intersection with each reporting
+  month. A closed or scheduled engagement reduces the obligation coverage window.
+- **Site and contractor deactivation**: Deactivating a site or contractor sets
+  `is_active=false`, but does not end engagements. Phase 3 reads the engagement's
+  `active_until` (not the parent's active flag) when determining coverage. Closing the
+  engagement is still the canonical way to end obligation generation for a path.
+- **Engagement correction guard**: The `PATCH` and `close` endpoints count downstream
+  `obligations` rows and refuse changes that would move `period_start`/`period_end`
+  outside any obligation's existing coverage window. This prevents silently invalidating
+  already-generated evidence requirements.
+- **Migration 000003 down guard**: The down migration checks `obligations` and
+  `requirement_assignments` tables (in addition to `sites`, `contractors`, and
+  `engagements`) to prevent rollback when Phase 3 data exists.
+- **Audit trail**: Phase 3 generation events record `system/cli` as the actor when run
+  from the `cmd/phase3` CLI, preserving an auditable chain from obligation creation
+  through Phase 4 submission/review.

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"vendorproof/internal/assignments"
 	"vendorproof/internal/auth"
 	"vendorproof/internal/config"
 	"vendorproof/internal/contractors"
@@ -19,7 +20,9 @@ import (
 	"vendorproof/internal/engagements"
 	"vendorproof/internal/httpserver"
 	"vendorproof/internal/logging"
+	"vendorproof/internal/obligations"
 	"vendorproof/internal/organizations"
+	"vendorproof/internal/requirements"
 	"vendorproof/internal/sites"
 )
 
@@ -58,6 +61,9 @@ func run() error {
 		Sites:         sites.NewService(pool),
 		Contractors:   contractors.NewService(pool),
 		Engagements:   engagements.NewService(pool),
+		Requirements:  requirements.NewService(pool),
+		Assignments:   assignments.NewService(pool),
+		Obligations:   obligations.NewService(pool),
 		Readiness:     pool,
 		MaxBodyBytes:  cfg.MaxBodyBytes,
 		Timeout:       cfg.RequestTimeout,

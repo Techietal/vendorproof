@@ -34,11 +34,21 @@ const (
 	ActionEngagementCorrected   = "engagement.corrected"
 	ActionEngagementClosed      = "engagement.closed"
 
+	ActionRequirementCreated                = "requirement.created"
+	ActionRequirementVersionPublished       = "requirement.version_published"
+	ActionRequirementAssignmentCreated      = "requirement_assignment.created"
+	ActionRequirementAssignmentEnded        = "requirement_assignment.ended"
+	ActionRequirementAssignmentTransitioned = "requirement_assignment.transitioned"
+	ActionObligationGenerated               = "obligation.generated"
+
 	ResourceOrganization = "organization"
 	ResourceMembership   = "membership"
 	ResourceSite         = "site"
 	ResourceContractor   = "contractor"
 	ResourceEngagement   = "engagement"
+	ResourceRequirement  = "requirement"
+	ResourceAssignment   = "requirement_assignment"
+	ResourceObligation   = "obligation"
 )
 
 // Event is one audit row. Details must stay small and non-sensitive.

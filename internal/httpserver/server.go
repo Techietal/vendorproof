@@ -14,12 +14,15 @@ import (
 	"github.com/google/uuid"
 
 	"vendorproof/internal/apperr"
+	"vendorproof/internal/assignments"
 	"vendorproof/internal/authz"
 	"vendorproof/internal/contractors"
 	"vendorproof/internal/engagements"
 	"vendorproof/internal/httpx"
 	"vendorproof/internal/identity"
+	"vendorproof/internal/obligations"
 	"vendorproof/internal/organizations"
+	"vendorproof/internal/requirements"
 	"vendorproof/internal/sites"
 )
 
@@ -69,6 +72,31 @@ type EngagementService interface {
 	Close(ctx context.Context, actor identity.Identity, orgID, engagementID uuid.UUID, until string) (engagements.Engagement, error)
 }
 
+// RequirementService is the HTTP-facing requirement application boundary.
+type RequirementService interface {
+	Create(ctx context.Context, actor identity.Identity, orgID uuid.UUID, in requirements.CreateInput) (requirements.RequirementVersion, error)
+	ListFamilies(ctx context.Context, actor identity.Identity, orgID uuid.UUID, limit int, cursor string) ([]requirements.Requirement, string, error)
+	ListVersions(ctx context.Context, actor identity.Identity, orgID, key uuid.UUID, limit int, cursor string) ([]requirements.RequirementVersion, string, error)
+	GetVersion(ctx context.Context, actor identity.Identity, orgID, versionID uuid.UUID) (requirements.RequirementVersion, error)
+	PublishVersionByKey(ctx context.Context, actor identity.Identity, orgID, key uuid.UUID, in requirements.PublishInput) (requirements.RequirementVersion, error)
+}
+
+// AssignmentService is the HTTP-facing assignment application boundary.
+type AssignmentService interface {
+	Create(ctx context.Context, actor identity.Identity, orgID uuid.UUID, in assignments.CreateInput) (assignments.Assignment, error)
+	Get(ctx context.Context, actor identity.Identity, orgID, assignmentID uuid.UUID) (assignments.Assignment, error)
+	List(ctx context.Context, actor identity.Identity, orgID uuid.UUID, f assignments.Filter, limit int, cursor string) ([]assignments.Assignment, string, error)
+	End(ctx context.Context, actor identity.Identity, orgID, assignmentID uuid.UUID, rawUntil string) (assignments.Assignment, error)
+	Transition(ctx context.Context, actor identity.Identity, orgID, assignmentID uuid.UUID, in assignments.TransitionInput) (assignments.Assignment, assignments.Assignment, error)
+}
+
+// ObligationService is the HTTP-facing obligation application boundary.
+type ObligationService interface {
+	GenerateForMonth(ctx context.Context, actor identity.Identity, orgID uuid.UUID, year, month int, dryRun bool) (obligations.GenerationResult, error)
+	List(ctx context.Context, actor identity.Identity, orgID uuid.UUID, f obligations.ListFilter, limit int, cursor string) ([]obligations.Obligation, []obligations.DisplayStatus, string, error)
+	Get(ctx context.Context, actor identity.Identity, orgID, obligationID uuid.UUID) (obligations.Obligation, obligations.DisplayStatus, error)
+}
+
 // Readiness reports whether a required dependency is usable.
 type Readiness interface {
 	Ping(ctx context.Context) error
@@ -82,6 +110,9 @@ type Deps struct {
 	Sites         SiteService
 	Contractors   ContractorService
 	Engagements   EngagementService
+	Requirements  RequirementService
+	Assignments   AssignmentService
+	Obligations   ObligationService
 	Readiness     Readiness
 	MaxBodyBytes  int64
 	Timeout       time.Duration
@@ -139,6 +170,24 @@ func New(deps Deps) http.Handler {
 	protected.HandleFunc("GET /v1/organizations/{organizationId}/engagements/{engagementId}", s.getEngagement)
 	protected.HandleFunc("PATCH /v1/organizations/{organizationId}/engagements/{engagementId}", s.correctEngagement)
 	protected.HandleFunc("POST /v1/organizations/{organizationId}/engagements/{engagementId}/close", s.closeEngagement)
+	// Requirements
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/requirements", s.createRequirement)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/requirements", s.listRequirements)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/requirements/{requirementKey}", s.getRequirement)
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/requirements/{requirementKey}/versions", s.publishVersion)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/requirement-versions/{versionId}", s.getRequirementVersion)
+
+	// Requirement assignments
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/requirement-assignments", s.createAssignment)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/requirement-assignments", s.listAssignments)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/requirement-assignments/{assignmentId}", s.getAssignment)
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/requirement-assignments/{assignmentId}/end", s.endAssignment)
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/requirement-assignments/{assignmentId}/transition", s.transitionAssignment)
+
+	// Obligations
+	protected.HandleFunc("POST /v1/organizations/{organizationId}/obligations/generate", s.generateObligations)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/obligations", s.listObligations)
+	protected.HandleFunc("GET /v1/organizations/{organizationId}/obligations/{obligationId}", s.getObligation)
 	mux.Handle("/v1/", s.authenticate(protected))
 
 	var handler http.Handler = mux
