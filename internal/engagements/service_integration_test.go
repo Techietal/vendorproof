@@ -337,23 +337,27 @@ func TestCorrection(t *testing.T) {
 func seedObligation(t *testing.T, pool *pgxpool.Pool, orgID, engagementID uuid.UUID, start, end string) {
 	t.Helper()
 	versionID := uuid.New()
+	requirementKey := uuid.New()
+	testutil.MustExec(t, pool, `INSERT INTO requirements (id, organization_id) VALUES ($1, $2)`, requirementKey, orgID)
 	testutil.MustExec(t, pool, `INSERT INTO requirement_versions
-		(id, organization_id, requirement_key, version, name, cadence, due_day, effective_from)
-		VALUES ($1, $2, $3, 1, 'R', 'monthly', 10, '2025-01-01')`, versionID, orgID, uuid.New())
+		(id, organization_id, requirement_key, version, name, cadence, due_day, effective_from, reporting_timezone)
+		VALUES ($1, $2, $3, 1, 'R', 'monthly', 10, '2025-01-01', 'UTC')`, versionID, orgID, requirementKey)
 	testutil.MustExec(t, pool, `INSERT INTO obligations
-		(id, organization_id, engagement_id, requirement_version_id, period_start, period_end, due_at)
-		VALUES ($1, $2, $3, $4, $5, $6, now())`, uuid.New(), orgID, engagementID, versionID, start, end)
+		(id, organization_id, engagement_id, requirement_version_id, requirement_key, period_start, period_end, coverage_start, coverage_end, due_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $6, $7, now())`, uuid.New(), orgID, engagementID, versionID, requirementKey, start, end)
 }
 
 func seedAssignment(t *testing.T, pool *pgxpool.Pool, orgID, engagementID uuid.UUID) {
 	t.Helper()
 	versionID := uuid.New()
+	requirementKey := uuid.New()
+	testutil.MustExec(t, pool, `INSERT INTO requirements (id, organization_id) VALUES ($1, $2)`, requirementKey, orgID)
 	testutil.MustExec(t, pool, `INSERT INTO requirement_versions
-		(id, organization_id, requirement_key, version, name, cadence, due_day, effective_from)
-		VALUES ($1, $2, $3, 1, 'R', 'monthly', 10, '2025-01-01')`, versionID, orgID, uuid.New())
+		(id, organization_id, requirement_key, version, name, cadence, due_day, effective_from, reporting_timezone)
+		VALUES ($1, $2, $3, 1, 'R', 'monthly', 10, '2025-01-01', 'UTC')`, versionID, orgID, requirementKey)
 	testutil.MustExec(t, pool, `INSERT INTO requirement_assignments
-		(id, organization_id, engagement_id, requirement_version_id)
-		VALUES ($1, $2, $3, $4)`, uuid.New(), orgID, engagementID, versionID)
+		(id, organization_id, engagement_id, requirement_version_id, requirement_key, effective_from, effective_until)
+		VALUES ($1, $2, $3, $4, $5, '1970-01-01', NULL)`, uuid.New(), orgID, engagementID, versionID, requirementKey)
 }
 
 func TestCorrectionsGuardDownstreamHistory(t *testing.T) {

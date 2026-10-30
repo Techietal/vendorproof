@@ -81,6 +81,7 @@ func midnight(t time.Time, loc *time.Location) time.Time {
 	return time.Date(y, m, d, 0, 0, 0, 0, loc)
 }
 
+// ReviewState is the lifecycle state of an obligation.
 type ReviewState string
 
 const (
@@ -89,11 +90,6 @@ const (
 	NeedsCorrection    ReviewState = "needs_correction"
 	Accepted           ReviewState = "accepted"
 )
-
-type DisplayStatus struct {
-	ReviewState       ReviewState
-	ContractorOverdue bool
-}
 
 // Status derives lateness rather than persisting a potentially stale overdue flag.
 // Awaiting internal review is never treated as a contractor delay.
